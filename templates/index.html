@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Library Events Viewer</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            background: #2c3e50;
+            color: white;
+            padding: 20px;
+            border-radius: 8px 8px 0 0;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+        }
+        .controls {
+            padding: 20px;
+            border-bottom: 1px solid #eee;
+            background: #f8f9fa;
+        }
+        .filter-group {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .filter-group label {
+            font-weight: 600;
+            color: #333;
+        }
+        .filter-group select, .filter-group input {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .filter-group button {
+            padding: 8px 16px;
+            background: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .filter-group button:hover {
+            background: #2980b9;
+        }
+        .refresh-btn {
+            background: #27ae60 !important;
+        }
+        .refresh-btn:hover {
+            background: #219a52 !important;
+        }
+        .events-container {
+            padding: 20px;
+        }
+        .events-grid {
+            display: grid;
+            gap: 15px;
+        }
+        .event-card {
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            padding: 15px;
+            background: white;
+            transition: box-shadow 0.2s;
+        }
+        .event-card:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .event-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 10px;
+        }
+        .event-title {
+            font-weight: 600;
+            color: #2c3e50;
+            font-size: 16px;
+            margin: 0;
+        }
+        .event-library {
+            background: #3498db;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .event-meta {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 8px;
+            margin-bottom: 10px;
+            font-size: 14px;
+            color: #666;
+        }
+        .event-meta span {
+            display: flex;
+            align-items: center;
+        }
+        .event-meta .icon {
+            margin-right: 6px;
+            width: 16px;
+        }
+        .event-description {
+            color: #555;
+            line-height: 1.4;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        .event-link {
+            text-align: right;
+        }
+        .event-link a {
+            color: #3498db;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        .event-link a:hover {
+            text-decoration: underline;
+        }
+        .status-bar {
+            padding: 15px 20px;
+            background: #f8f9fa;
+            border-top: 1px solid #eee;
+            color: #666;
+            font-size: 14px;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        .no-events {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+        @media (max-width: 768px) {
+            .filter-group {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .event-header {
+                flex-direction: column;
+                gap: 10px;
+            }
+            .event-meta {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📚 Library Events Viewer</h1>
+            <p style="margin: 10px 0 0 0; opacity: 0.9;">
+                Total Events: {{ total_events }} 
+                {% if csv_file %}| Loaded from: {{ csv_file }}{% endif %}
+            </p>
+        </div>
+        
+        <div class="controls">
+            <div class="filter-group">
+                <label for="library-filter">Library:</label>
+                <select id="library-filter">
+                    <option value="All">All Libraries</option>
+                    {% for library in libraries %}
+                    <option value="{{ library }}">{{ library }}</option>
+                    {% endfor %}
+                </select>
+                
+                <label>Type:</label>
+                <div id="type-checkboxes" class="type-checkboxes" style="max-height: 120px; overflow: auto; border: 1px solid #ddd; padding: 6px 10px; border-radius: 4px; background: #fff;">
+                    {% if types %}
+                        {% for t in types %}
+                        <label style="display:inline-flex; align-items:center; margin-right: 12px; margin-bottom: 6px; white-space: nowrap;">
+                            <input type="checkbox" name="type" value="{{ t }}" style="margin-right:6px;"> {{ t }}
+                        </label>
+                        {% endfor %}
+                    {% endif %}
+                </div>
+
+                <label for="search-input">Search:</label>
+                <input type="text" id="search-input" placeholder="Search events..." style="min-width: 200px;">
+
+                <label for="date-preset">Dates:</label>
+                <select id="date-preset">
+                    <option value="all">All Dates</option>
+                    <option value="today">Today</option>
+                    <option value="tomorrow">Tomorrow</option>
+                    <option value="next7">Next 7 Days</option>
+                    <option value="next14">Next 14 Days</option>
+                    <option value="thisweek">This Week</option>
+                    <option value="weekend">This Weekend</option>
+                    <option value="thismonth">This Month</option>
+                    <option value="custom">Custom Range</option>
+                </select>
+                <span id="custom-date-range" style="display:none;">
+                    <label for="start-date">Start:</label>
+                    <input type="date" id="start-date" {% if min_date %}min="{{ min_date }}"{% endif %} {% if max_date %}max="{{ max_date }}"{% endif %}>
+                    <label for="end-date">End:</label>
+                    <input type="date" id="end-date" {% if min_date %}min="{{ min_date }}"{% endif %} {% if max_date %}max="{{ max_date }}"{% endif %}>
+                    <button type="button" id="clear-range-btn">Clear</button>
+                </span>
+                
+                <button onclick="applyFilters()">Apply Filters</button>
+                <button onclick="refreshData()" class="refresh-btn">Refresh Data</button>
+            </div>
+        </div>
+        
+        <div class="events-container">
+            <div id="events-grid" class="events-grid">
+                <div class="loading">Loading events...</div>
+            </div>
+        </div>
+        
+        <div class="status-bar">
+            <span id="status">Ready</span>
+        </div>
+    </div>
+
+    <script>
+        let allEvents = [];
+        let filteredEvents = [];
+
+        // Load events on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            // Initialize preset to Today if within bounds
+            const preset = document.getElementById('date-preset');
+            const startInput = document.getElementById('start-date');
+            const endInput = document.getElementById('end-date');
+            const today = new Date();
+            const yyyy = today.getFullYear();
+            const mm = String(today.getMonth() + 1).padStart(2, '0');
+            const dd = String(today.getDate()).padStart(2, '0');
+            const todayIso = `${yyyy}-${mm}-${dd}`;
+            const min = startInput ? startInput.getAttribute('min') : null;
+            const max = endInput ? endInput.getAttribute('max') : null;
+            if ((!min || todayIso >= min) && (!max || todayIso <= max)) {
+                preset.value = 'today';
+            } else {
+                preset.value = 'all';
+            }
+            // Toggle custom range UI
+            preset.addEventListener('change', function() {
+                const show = preset.value === 'custom';
+                document.getElementById('custom-date-range').style.display = show ? 'inline-flex' : 'none';
+            });
+            // Clear range button
+            document.getElementById('clear-range-btn').addEventListener('click', function() {
+                startInput.value = '';
+                endInput.value = '';
+                applyFilters();
+            });
+
+            loadEvents().then(() => applyFilters());
+            
+            // Add enter key support for search
+            document.getElementById('search-input').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    applyFilters();
+                }
+            });
+        });
+
+        async function loadEvents() {
+            try {
+                const response = await fetch('/api/events');
+                const data = await response.json();
+                allEvents = data.events;
+                displayEvents(allEvents);
+                updateStatus(`Showing ${data.total} events`);
+            } catch (error) {
+                document.getElementById('events-grid').innerHTML = 
+                    '<div class="no-events">Error loading events: ' + error.message + '</div>';
+                updateStatus('Error loading events');
+            }
+        }
+
+        async function applyFilters() {
+            const library = document.getElementById('library-filter').value;
+            const typeSelected = Array.from(document.querySelectorAll('#type-checkboxes input[type="checkbox"]:checked')).map(cb => cb.value);
+            const search = document.getElementById('search-input').value;
+            const preset = document.getElementById('date-preset').value;
+            const startInput = document.getElementById('start-date');
+            const endInput = document.getElementById('end-date');
+            const { startIso, endIso, note } = computeDateRange(preset, startInput.value, endInput.value);
+            
+            updateStatus('Filtering events...');
+            
+            try {
+                const typeParams = typeSelected.map(t => `&type=${encodeURIComponent(t)}`).join('');
+                const rangeParams = (startIso ? `&start=${encodeURIComponent(startIso)}` : '') + (endIso ? `&end=${encodeURIComponent(endIso)}` : '');
+                const url = `/api/events?library=${encodeURIComponent(library)}${typeParams}&search=${encodeURIComponent(search)}${rangeParams}`;
+                const response = await fetch(url);
+                const data = await response.json();
+                filteredEvents = data.events;
+                displayEvents(filteredEvents);
+                const dateNote = note ? ` ${note}` : '';
+                updateStatus(`Showing ${data.total} of ${allEvents.length} events${dateNote}`);
+            } catch (error) {
+                updateStatus('Error filtering events');
+            }
+        }
+
+        function computeDateRange(preset, customStart, customEnd) {
+            const today = new Date();
+            const toISO = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+            let start = null, end = null, note = '';
+            const dow = today.getDay(); // 0=Sun..6=Sat
+            if (preset === 'all') {
+                return { startIso: '', endIso: '', note: '' };
+            }
+            if (preset === 'today') {
+                start = new Date(today); end = new Date(today);
+                note = `on ${toISO(start)}`;
+            } else if (preset === 'tomorrow') {
+                start = new Date(today); start.setDate(start.getDate()+1); end = new Date(start);
+                note = `on ${toISO(start)}`;
+            } else if (preset === 'next7') {
+                start = new Date(today); end = new Date(today); end.setDate(end.getDate()+6);
+                note = `from ${toISO(start)} to ${toISO(end)}`;
+            } else if (preset === 'next14') {
+                start = new Date(today); end = new Date(today); end.setDate(end.getDate()+13);
+                note = `from ${toISO(start)} to ${toISO(end)}`;
+            } else if (preset === 'thisweek') {
+                // Sunday-Saturday
+                start = new Date(today); start.setDate(start.getDate() - dow);
+                end = new Date(start); end.setDate(start.getDate()+6);
+                note = `this week (${toISO(start)} to ${toISO(end)})`;
+            } else if (preset === 'weekend') {
+                // Upcoming Fri-Sun (if already weekend, use current Fri-Sun)
+                const daysUntilFri = (5 - dow + 7) % 7;
+                start = new Date(today); start.setDate(start.getDate() + daysUntilFri);
+                end = new Date(start); end.setDate(start.getDate() + 2);
+                // If today is Sun (0), daysUntilFri=5 ⇒ next weekend; that's fine
+                note = `weekend (${toISO(start)} to ${toISO(end)})`;
+            } else if (preset === 'thismonth') {
+                start = new Date(today.getFullYear(), today.getMonth(), 1);
+                end = new Date(today.getFullYear(), today.getMonth()+1, 0);
+                note = `this month (${toISO(start)} to ${toISO(end)})`;
+            } else if (preset === 'custom') {
+                const s = customStart || '';
+                const e = customEnd || '';
+                if (s && e) note = `from ${s} to ${e}`;
+                else if (s) note = `on/after ${s}`;
+                else if (e) note = `on/before ${e}`;
+                return { startIso: s, endIso: e, note };
+            }
+            return { startIso: start ? toISO(start) : '', endIso: end ? toISO(end) : '', note };
+        }
+
+        function displayEvents(events) {
+            const grid = document.getElementById('events-grid');
+            
+            if (events.length === 0) {
+                grid.innerHTML = '<div class="no-events">No events found matching your criteria.</div>';
+                return;
+            }
+            
+            grid.innerHTML = events.map(event => `
+                <div class="event-card">
+                    <div class="event-header">
+                        <h3 class="event-title">${escapeHtml(event.Title || 'Untitled Event')}</h3>
+                        <span class="event-library">${escapeHtml(event.Library || 'Unknown')}</span>
+                    </div>
+                    
+                    <div class="event-meta">
+                        <span><span class="icon">📅</span> ${escapeHtml(event.Date || 'Date TBD')}</span>
+                        <span><span class="icon">🕐</span> ${escapeHtml(event.Time || 'Time TBD')}</span>
+                        <span><span class="icon">📍</span> ${escapeHtml(event.Location || 'Location TBD')}</span>
+                        <span><span class="icon">👥</span> ${escapeHtml(event['Age Group'] || 'All Ages')}</span>
+                    </div>
+                    
+                    ${event.Description && event.Description !== 'Not found' ? 
+                        `<div class="event-description">${escapeHtml(event.Description)}</div>` : ''}
+                    
+                    ${event.Link && event.Link !== 'N/A' && event.Link !== '' ? 
+                        `<div class="event-link">
+                            <a href="${escapeHtml(event.Link)}" target="_blank" rel="noopener">More Info →</a>
+                        </div>` : ''}
+                </div>
+            `).join('');
+        }
+
+        async function refreshData() {
+            updateStatus('Refreshing data... This may take a few minutes.');
+            const refreshBtn = document.querySelector('.refresh-btn');
+            refreshBtn.disabled = true;
+            refreshBtn.textContent = 'Refreshing...';
+            
+            try {
+                const response = await fetch('/api/refresh');
+                const result = await response.json();
+                
+                if (result.success) {
+                    updateStatus(result.message);
+                    await loadEvents(); // Reload events
+                } else {
+                    updateStatus('Error: ' + result.message);
+                }
+            } catch (error) {
+                updateStatus('Error refreshing data: ' + error.message);
+            } finally {
+                refreshBtn.disabled = false;
+                refreshBtn.textContent = 'Refresh Data';
+            }
+        }
+
+        function updateStatus(message) {
+            document.getElementById('status').textContent = message;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
