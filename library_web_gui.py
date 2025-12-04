@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """
 Library Events Web GUI
-A simple Flask-based web interface to view and filter library events.
+A simple Flask-based web interface to view, filter, and export library events.
 """
 
 from flask import Flask, render_template, request, jsonify, send_file
 import pandas as pd
 import os
 import json
-from datetime import datetime, date
+import re
+import hashlib
+from io import BytesIO
+from datetime import datetime, date, timedelta
+from zoneinfo import ZoneInfo
+from ics import Calendar, Event
 import webbrowser
 import threading
 import time
@@ -16,12 +21,188 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.getenv("DATA_DIR", BASE_DIR)).resolve()
+TIMEZONE = os.getenv("TIMEZONE", "America/Chicago")
+TZINFO = ZoneInfo(TIMEZONE)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__, template_folder=str(BASE_DIR / "templates"))
 
 # Global variable to store events data
 events_data = []
+
+
+def clean_text(value: str) -> str:
+    """Lightweight cleaner for ICS-friendly text."""
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.replace("\u200b", " ").split())
+
+
+def parse_event_date(dstr: str):
+    """Parse common date strings used in the CSV."""
+    if not dstr:
+        return None
+    for fmt in ("%A, %B %d, %Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(str(dstr), fmt).date()
+        except Exception:
+            continue
+    return None
+
+
+def parse_time_to_sortable(time_str: str) -> datetime.time:
+    """Parses various time formats into a time object for sorting."""
+    if not isinstance(time_str, str):
+        return datetime.min.time()
+
+    try:
+        time_str = time_str.lower().strip().split('@')[-1]
+        time_str = re.split(r'–|-', time_str)[0].strip()
+        if 'all day' in time_str:
+            return datetime.min.time()
+        formats_to_try = ['%I:%M %p', '%I:%M%p', '%-I:%M %p', '%I %p', '%-I%p']
+        for fmt in formats_to_try:
+            try:
+                return datetime.strptime(time_str.replace(" ", ""), fmt).time()
+            except ValueError:
+                continue
+        return datetime.min.time()
+    except Exception:
+        return datetime.min.time()
+
+
+def filter_events(library_filter='All', type_filters=None, search_term='', start_date='', end_date='', date_filter=''):
+    """Apply shared filtering logic used by both JSON API and ICS export."""
+    type_filters = type_filters or []
+    filtered_events = events_data.copy()
+
+    # Apply library filter
+    if library_filter and library_filter != 'All':
+        filtered_events = [e for e in filtered_events if e.get('Library', '') == library_filter]
+
+    # Apply type (age group) filters
+    if type_filters:
+        selected = set(type_filters)
+
+        def get_event_types(ev):
+            raw = (ev.get('Age Group', '') or '')
+            parts = [p.strip() for p in str(raw).split(',') if p.strip()]
+            return set(parts) if parts else {raw} if raw else set()
+
+        filtered_events = [e for e in filtered_events if get_event_types(e) & selected]
+
+    # Apply search filter
+    if search_term:
+        st = search_term.lower().strip()
+        filtered_events = [
+            e for e in filtered_events
+            if st in (e.get('Title', '') or '').lower()
+            or st in (e.get('Description', '') or '').lower()
+            or st in (e.get('Location', '') or '').lower()
+        ]
+
+    # Date filtering: single date (legacy) or range [start, end]
+    # If explicit range provided, prefer that
+    def within_range(ev_date, start, end):
+        if not ev_date:
+            return False
+        if start and ev_date < start:
+            return False
+        if end and ev_date > end:
+            return False
+        return True
+
+    if start_date or end_date:
+        try:
+            start = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else None
+        except ValueError:
+            start = None
+        try:
+            end = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else None
+        except ValueError:
+            end = None
+        filtered_events = [e for e in filtered_events if within_range(parse_event_date(e.get('Date') or ''), start, end)]
+    elif date_filter:
+        try:
+            target = datetime.strptime(date_filter, "%Y-%m-%d").date()
+        except ValueError:
+            target = None
+        if target:
+            filtered_events = [e for e in filtered_events if parse_event_date(e.get('Date') or '') == target]
+
+    return filtered_events
+
+
+def slugify(text: str) -> str:
+    """Turn user-facing labels into safe filename fragments."""
+    return re.sub(r'[^A-Za-z0-9]+', '_', text or '').strip('_') or 'events'
+
+
+def events_to_ics(events, filename_prefix="library_events") -> tuple[str, str]:
+    """Convert a list of event dicts into an ICS string and download filename."""
+    cal = Calendar()
+    for event in events:
+        event_date = parse_event_date(event.get('Date') or '')
+        if not event_date:
+            continue
+
+        time_str = event.get('Time', '') or ''
+        start_time = parse_time_to_sortable(time_str)
+        start_dt = datetime.combine(event_date, start_time).replace(tzinfo=TZINFO)
+        end_dt = start_dt + timedelta(hours=1)
+
+        time_parts = re.split(r'–|-', time_str)
+        if len(time_parts) > 1:
+            end_time_str = time_parts[1].strip()
+            for fmt in ['%I:%M %p', '%I:%M%p', '%-I:%M %p', '%I %p', '%-I%p']:
+                try:
+                    end_time_obj = datetime.strptime(end_time_str.replace(" ", ""), fmt).time()
+                    end_dt = datetime.combine(event_date, end_time_obj).replace(tzinfo=TZINFO)
+                    break
+                except ValueError:
+                    continue
+
+        e = Event()
+        e.name = clean_text(event.get('Title', 'Untitled Event'))
+        e.begin = start_dt
+        e.end = end_dt
+
+        if start_time == datetime.min.time():
+            e.make_all_day()
+
+        description_parts = []
+        age_group = event.get('Age Group', '')
+        description = event.get('Description', '')
+        link = event.get('Link', '')
+
+        if age_group and age_group != 'Not specified':
+            description_parts.append(f"Age Group: {age_group}")
+        if description and description != 'Not found':
+            description_parts.append(clean_text(description))
+        if link and link != "N/A":
+            description_parts.append(f"More Info: {link}")
+
+        e.description = "\n".join(description_parts)
+        e.location = clean_text(event.get('Location', ''))
+
+        uid_src = "|".join([
+            str(event.get('Library', '')),
+            str(event.get('Title', '')),
+            str(event.get('Date', '')),
+            str(event.get('Time', '')),
+            str(event.get('Location', ''))
+        ])
+        e.uid = hashlib.md5(uid_src.encode('utf-8', errors='ignore')).hexdigest() + "@library-scraper"
+        if link and link != 'N/A':
+            try:
+                e.url = link
+            except Exception:
+                pass
+
+        cal.events.add(e)
+
+    filename = f"{filename_prefix}.ics"
+    return cal.serialize(), filename
 
 def load_latest_csv():
     """Load the most recent CSV file"""
@@ -96,79 +277,59 @@ def get_events():
     date_filter = request.args.get('date', '').strip()  # legacy single date YYYY-MM-DD
     start_date = request.args.get('start', '').strip()  # YYYY-MM-DD
     end_date = request.args.get('end', '').strip()      # YYYY-MM-DD
-    
-    filtered_events = events_data.copy()
-    
-    # Apply library filter
-    if library_filter != 'All':
-        filtered_events = [e for e in filtered_events if e.get('Library', '') == library_filter]
-    
-    # Apply type (age group) filters (multi-select). If any selected, keep events intersecting selected types.
-    if type_filters:
-        selected = set(type_filters)
-        def get_event_types(ev):
-            raw = (ev.get('Age Group', '') or '')
-            parts = [p.strip() for p in str(raw).split(',') if p.strip()]
-            return set(parts) if parts else set([raw]) if raw else set()
-        filtered_events = [e for e in filtered_events if get_event_types(e) & selected]
-    
-    # Apply search filter
-    if search_term:
-        filtered_events = [e for e in filtered_events if 
-                          search_term in (e.get('Title', '') or '').lower() or
-                          search_term in (e.get('Description', '') or '').lower() or
-                          search_term in (e.get('Location', '') or '').lower()]
-    
-    # Date filtering: single date (legacy) or range [start, end]
-    def parse_event_date(dstr: str):
-        if not dstr:
-            return None
-        for fmt in ("%A, %B %d, %Y", "%Y-%m-%d"):
-            try:
-                return datetime.strptime(str(dstr), fmt).date()
-            except Exception:
-                continue
-        return None
 
-    # If explicit range provided, prefer that
-    if start_date or end_date:
-        try:
-            start = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else None
-        except ValueError:
-            start = None
-        try:
-            end = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else None
-        except ValueError:
-            end = None
-        kept = []
-        for e in filtered_events:
-            d = parse_event_date(e.get('Date') or '')
-            if not d:
-                continue
-            if start and d < start:
-                continue
-            if end and d > end:
-                continue
-            kept.append(e)
-        filtered_events = kept
-    elif date_filter:
-        # Legacy exact-date match
-        try:
-            target = datetime.strptime(date_filter, "%Y-%m-%d").date()
-        except ValueError:
-            target = None
-        if target:
-            kept = []
-            for e in filtered_events:
-                d = parse_event_date(e.get('Date') or '')
-                if d and d == target:
-                    kept.append(e)
-            filtered_events = kept
-    
+    filtered_events = filter_events(
+        library_filter=library_filter,
+        type_filters=type_filters,
+        search_term=search_term,
+        start_date=start_date,
+        end_date=end_date,
+        date_filter=date_filter
+    )
+
     return jsonify({
         'events': filtered_events,
         'total': len(filtered_events)
     })
+
+
+@app.route('/api/ics')
+def download_ics():
+    """Download an ICS file for all or filtered events using the same filters as /api/events."""
+    library_filter = request.args.get('library', 'All')
+    type_filters = [t.strip() for t in request.args.getlist('type') if (t or '').strip()]
+    search_term = request.args.get('search', '').lower().strip()
+    date_filter = request.args.get('date', '').strip()
+    start_date = request.args.get('start', '').strip()
+    end_date = request.args.get('end', '').strip()
+
+    filtered_events = filter_events(
+        library_filter=library_filter,
+        type_filters=type_filters,
+        search_term=search_term,
+        start_date=start_date,
+        end_date=end_date,
+        date_filter=date_filter
+    )
+
+    if not filtered_events:
+        return jsonify({'error': 'No events available for ICS export'}), 404
+
+    filename_parts = ["library_events"]
+    if library_filter and library_filter != 'All':
+        filename_parts.append(slugify(library_filter))
+    if start_date or end_date:
+        filename_parts.append("_".join(filter(None, [start_date, end_date])))
+    ics_content, filename = events_to_ics(filtered_events, "_".join(filter(None, filename_parts)))
+
+    buffer = BytesIO(ics_content.encode('utf-8'))
+    buffer.seek(0)
+    return send_file(
+        buffer,
+        mimetype='text/calendar',
+        as_attachment=True,
+        download_name=filename
+    )
 
 @app.route('/api/refresh')
 def refresh_data():

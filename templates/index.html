@@ -67,6 +67,15 @@
         .refresh-btn:hover {
             background: #219a52 !important;
         }
+        .ics-btn {
+            background: #8e44ad !important;
+        }
+        .ics-btn.secondary {
+            background: #7f8c8d !important;
+        }
+        .ics-btn:hover {
+            opacity: 0.9;
+        }
         .events-container {
             padding: 20px;
         }
@@ -225,6 +234,8 @@
                 
                 <button onclick="applyFilters()">Apply Filters</button>
                 <button onclick="refreshData()" class="refresh-btn">Refresh Data</button>
+                <button type="button" onclick="downloadIcs(true)" class="ics-btn">Download Filtered .ics</button>
+                <button type="button" onclick="downloadIcs(false)" class="ics-btn secondary">Download All .ics</button>
             </div>
         </div>
         
@@ -298,6 +309,24 @@
         }
 
         async function applyFilters() {
+            const state = getFilterState();
+            
+            updateStatus('Filtering events...');
+            
+            try {
+                const url = `/api/events?${buildQueryString(state)}`;
+                const response = await fetch(url);
+                const data = await response.json();
+                filteredEvents = data.events;
+                displayEvents(filteredEvents);
+                const dateNote = state.note ? ` ${state.note}` : '';
+                updateStatus(`Showing ${data.total} of ${allEvents.length} events${dateNote}`);
+            } catch (error) {
+                updateStatus('Error filtering events');
+            }
+        }
+
+        function getFilterState() {
             const library = document.getElementById('library-filter').value;
             const typeSelected = Array.from(document.querySelectorAll('#type-checkboxes input[type="checkbox"]:checked')).map(cb => cb.value);
             const search = document.getElementById('search-input').value;
@@ -305,22 +334,13 @@
             const startInput = document.getElementById('start-date');
             const endInput = document.getElementById('end-date');
             const { startIso, endIso, note } = computeDateRange(preset, startInput.value, endInput.value);
-            
-            updateStatus('Filtering events...');
-            
-            try {
-                const typeParams = typeSelected.map(t => `&type=${encodeURIComponent(t)}`).join('');
-                const rangeParams = (startIso ? `&start=${encodeURIComponent(startIso)}` : '') + (endIso ? `&end=${encodeURIComponent(endIso)}` : '');
-                const url = `/api/events?library=${encodeURIComponent(library)}${typeParams}&search=${encodeURIComponent(search)}${rangeParams}`;
-                const response = await fetch(url);
-                const data = await response.json();
-                filteredEvents = data.events;
-                displayEvents(filteredEvents);
-                const dateNote = note ? ` ${note}` : '';
-                updateStatus(`Showing ${data.total} of ${allEvents.length} events${dateNote}`);
-            } catch (error) {
-                updateStatus('Error filtering events');
-            }
+            return { library, typeSelected, search, startIso, endIso, note };
+        }
+
+        function buildQueryString(state) {
+            const typeParams = state.typeSelected.map(t => `&type=${encodeURIComponent(t)}`).join('');
+            const rangeParams = (state.startIso ? `&start=${encodeURIComponent(state.startIso)}` : '') + (state.endIso ? `&end=${encodeURIComponent(state.endIso)}` : '');
+            return `library=${encodeURIComponent(state.library)}${typeParams}&search=${encodeURIComponent(state.search)}${rangeParams}`;
         }
 
         function computeDateRange(preset, customStart, customEnd) {
@@ -368,6 +388,34 @@
                 return { startIso: s, endIso: e, note };
             }
             return { startIso: start ? toISO(start) : '', endIso: end ? toISO(end) : '', note };
+        }
+
+        async function downloadIcs(useFilters = true) {
+            updateStatus('Preparing .ics download...');
+            const state = getFilterState();
+            const query = useFilters ? buildQueryString(state) : '';
+            const url = `/api/ics${query ? '?' + query : ''}`;
+
+            try {
+                const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error('Failed to generate .ics file');
+                }
+                const blob = await response.blob();
+                const downloadUrl = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                const disposition = response.headers.get('Content-Disposition') || '';
+                const match = /filename=\"?([^\";]+)\"?/i.exec(disposition);
+                a.href = downloadUrl;
+                a.download = match ? match[1] : 'library_events.ics';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(downloadUrl);
+                updateStatus(useFilters ? 'Downloaded filtered events as .ics' : 'Downloaded all events as .ics');
+            } catch (error) {
+                updateStatus('ICS download failed: ' + error.message);
+            }
         }
 
         function displayEvents(events) {
