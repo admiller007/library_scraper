@@ -76,6 +76,13 @@
         .ics-btn:hover {
             opacity: 0.9;
         }
+        .ghost-btn {
+            background: #ecf0f1 !important;
+            color: #2c3e50;
+        }
+        .ghost-btn:hover {
+            background: #dde4e8 !important;
+        }
         .events-container {
             padding: 20px;
         }
@@ -163,6 +170,42 @@
             padding: 40px;
             color: #999;
         }
+        .search-box {
+            min-width: 260px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .search-input-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .search-input-row input {
+            flex: 1;
+            min-width: 220px;
+        }
+        .search-options {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            font-size: 13px;
+            color: #555;
+        }
+        .search-options label {
+            font-weight: 500;
+        }
+        .search-hint {
+            font-size: 12px;
+            color: #777;
+        }
+        mark {
+            background: #fff3cd;
+            color: #b36b00;
+            padding: 0 2px;
+            border-radius: 2px;
+        }
         @media (max-width: 768px) {
             .filter-group {
                 flex-direction: column;
@@ -209,8 +252,27 @@
                     {% endif %}
                 </div>
 
-                <label for="search-input">Search:</label>
-                <input type="text" id="search-input" placeholder="Search events..." style="min-width: 200px;">
+                <div class="search-box">
+                    <label for="search-input">Search:</label>
+                    <div class="search-input-row">
+                        <input type="text" id="search-input" placeholder="Search title, description, location..." aria-label="Search events">
+                        <button type="button" id="clear-search-btn" class="ghost-btn">Clear</button>
+                    </div>
+                    <div class="search-options">
+                        <span>In:</span>
+                        <label><input type="checkbox" class="search-field" value="title" checked> Title</label>
+                        <label><input type="checkbox" class="search-field" value="description" checked> Description</label>
+                        <label><input type="checkbox" class="search-field" value="location" checked> Location</label>
+                        <label><input type="checkbox" class="search-field" value="age" checked> Age Group</label>
+                        <label><input type="checkbox" class="search-field" value="library"> Library</label>
+                        <span>Match:</span>
+                        <select id="search-mode">
+                            <option value="any">Any word</option>
+                            <option value="all">All words</option>
+                        </select>
+                        <span class="search-hint">Tip: use quotes for phrases (e.g., "story time")</span>
+                    </div>
+                </div>
 
                 <label for="date-preset">Dates:</label>
                 <select id="date-preset">
@@ -234,8 +296,7 @@
                 
                 <button onclick="applyFilters()">Apply Filters</button>
                 <button onclick="refreshData()" class="refresh-btn">Refresh Data</button>
-                <button type="button" onclick="downloadIcs(true)" class="ics-btn">Download Filtered .ics</button>
-                <button type="button" onclick="downloadIcs(false)" class="ics-btn secondary">Download All .ics</button>
+                <button type="button" onclick="chooseAndDownloadIcs()" class="ics-btn">Download .ics</button>
             </div>
         </div>
         
@@ -253,6 +314,8 @@
     <script>
         let allEvents = [];
         let filteredEvents = [];
+        let lastFilterState = null;
+        let searchDebounce = null;
 
         // Load events on page load
         document.addEventListener('DOMContentLoaded', function() {
@@ -284,6 +347,24 @@
                 applyFilters();
             });
 
+            const searchInput = document.getElementById('search-input');
+            const searchFields = document.querySelectorAll('.search-field');
+            const searchMode = document.getElementById('search-mode');
+            const clearSearchBtn = document.getElementById('clear-search-btn');
+
+            const triggerSearch = () => {
+                clearTimeout(searchDebounce);
+                searchDebounce = setTimeout(() => applyFilters(), 250);
+            };
+
+            searchInput.addEventListener('input', triggerSearch);
+            searchMode.addEventListener('change', applyFilters);
+            searchFields.forEach(cb => cb.addEventListener('change', applyFilters));
+            clearSearchBtn.addEventListener('click', () => {
+                searchInput.value = '';
+                applyFilters();
+            });
+
             loadEvents().then(() => applyFilters());
             
             // Add enter key support for search
@@ -310,6 +391,7 @@
 
         async function applyFilters() {
             const state = getFilterState();
+            lastFilterState = state;
             
             updateStatus('Filtering events...');
             
@@ -318,9 +400,10 @@
                 const response = await fetch(url);
                 const data = await response.json();
                 filteredEvents = data.events;
-                displayEvents(filteredEvents);
+                displayEvents(filteredEvents, state);
                 const dateNote = state.note ? ` ${state.note}` : '';
-                updateStatus(`Showing ${data.total} of ${allEvents.length} events${dateNote}`);
+                const searchNote = state.searchTokens.length ? ` | Search: ${state.search}` : '';
+                updateStatus(`Showing ${data.total} of ${allEvents.length} events${dateNote}${searchNote}`);
             } catch (error) {
                 updateStatus('Error filtering events');
             }
@@ -334,13 +417,18 @@
             const startInput = document.getElementById('start-date');
             const endInput = document.getElementById('end-date');
             const { startIso, endIso, note } = computeDateRange(preset, startInput.value, endInput.value);
-            return { library, typeSelected, search, startIso, endIso, note };
+            const searchFields = Array.from(document.querySelectorAll('.search-field:checked')).map(cb => cb.value);
+            const searchMode = document.getElementById('search-mode').value || 'any';
+            const searchTokens = parseSearchTokens(search);
+            return { library, typeSelected, search, searchFields, searchMode, searchTokens, startIso, endIso, note };
         }
 
         function buildQueryString(state) {
             const typeParams = state.typeSelected.map(t => `&type=${encodeURIComponent(t)}`).join('');
             const rangeParams = (state.startIso ? `&start=${encodeURIComponent(state.startIso)}` : '') + (state.endIso ? `&end=${encodeURIComponent(state.endIso)}` : '');
-            return `library=${encodeURIComponent(state.library)}${typeParams}&search=${encodeURIComponent(state.search)}${rangeParams}`;
+            const fieldsParam = state.searchFields.length ? `&search_fields=${encodeURIComponent(state.searchFields.join(','))}` : '';
+            const modeParam = state.searchMode ? `&search_mode=${encodeURIComponent(state.searchMode)}` : '';
+            return `library=${encodeURIComponent(state.library)}${typeParams}&search=${encodeURIComponent(state.search)}${rangeParams}${fieldsParam}${modeParam}`;
         }
 
         function computeDateRange(preset, customStart, customEnd) {
@@ -418,30 +506,44 @@
             }
         }
 
-        function displayEvents(events) {
+        async function chooseAndDownloadIcs() {
+            // Simple prompt: OK = filtered, Cancel = all
+            const hasFilters = filteredEvents.length && filteredEvents.length !== allEvents.length;
+            const message = hasFilters
+                ? `Download only the ${filteredEvents.length} filtered events? Click Cancel to download all ${allEvents.length}.`
+                : `No filters applied. Download all ${allEvents.length} events?`;
+            const useFiltered = confirm(message);
+            await downloadIcs(useFiltered && hasFilters);
+        }
+
+        function displayEvents(events, state = lastFilterState) {
             const grid = document.getElementById('events-grid');
+            const tokens = state?.searchTokens || [];
+            const fields = state?.searchFields || [];
             
             if (events.length === 0) {
                 grid.innerHTML = '<div class="no-events">No events found matching your criteria.</div>';
                 return;
             }
             
+            const highlight = (value, fieldKey) => highlightText(value, tokens, fields, fieldKey);
+
             grid.innerHTML = events.map(event => `
                 <div class="event-card">
                     <div class="event-header">
-                        <h3 class="event-title">${escapeHtml(event.Title || 'Untitled Event')}</h3>
-                        <span class="event-library">${escapeHtml(event.Library || 'Unknown')}</span>
+                        <h3 class="event-title">${highlight(event.Title || 'Untitled Event', 'title')}</h3>
+                        <span class="event-library">${highlight(event.Library || 'Unknown', 'library')}</span>
                     </div>
                     
                     <div class="event-meta">
-                        <span><span class="icon">📅</span> ${escapeHtml(event.Date || 'Date TBD')}</span>
-                        <span><span class="icon">🕐</span> ${escapeHtml(event.Time || 'Time TBD')}</span>
-                        <span><span class="icon">📍</span> ${escapeHtml(event.Location || 'Location TBD')}</span>
-                        <span><span class="icon">👥</span> ${escapeHtml(event['Age Group'] || 'All Ages')}</span>
+                        <span><span class="icon">📅</span> ${highlight(event.Date || 'Date TBD', 'date')}</span>
+                        <span><span class="icon">🕐</span> ${highlight(event.Time || 'Time TBD', 'time')}</span>
+                        <span><span class="icon">📍</span> ${highlight(event.Location || 'Location TBD', 'location')}</span>
+                        <span><span class="icon">👥</span> ${highlight(event['Age Group'] || 'All Ages', 'age')}</span>
                     </div>
                     
                     ${event.Description && event.Description !== 'Not found' ? 
-                        `<div class="event-description">${escapeHtml(event.Description)}</div>` : ''}
+                        `<div class="event-description">${highlight(event.Description, 'description')}</div>` : ''}
                     
                     ${event.Link && event.Link !== 'N/A' && event.Link !== '' ? 
                         `<div class="event-link">
@@ -473,6 +575,29 @@
                 refreshBtn.disabled = false;
                 refreshBtn.textContent = 'Refresh Data';
             }
+        }
+
+        function parseSearchTokens(input) {
+            if (!input) return [];
+            return (input.match(/"([^"]+)"|\S+/g) || [])
+                .map(token => token.replace(/^"+|"+$/g, ''))
+                .filter(Boolean);
+        }
+
+        function escapeRegExp(str) {
+            return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        function highlightText(text, tokens, fields, fieldKey) {
+            const safe = escapeHtml(text || '');
+            if (!tokens || !tokens.length) return safe;
+            if (fields && fields.length && !fields.includes(fieldKey)) {
+                return safe;
+            }
+            return tokens.reduce((acc, token) => {
+                const regex = new RegExp(`(${escapeRegExp(token)})`, 'ig');
+                return acc.replace(regex, '<mark>$1</mark>');
+            }, safe);
         }
 
         function updateStatus(message) {

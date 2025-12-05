@@ -71,10 +71,20 @@ def parse_time_to_sortable(time_str: str) -> datetime.time:
         return datetime.min.time()
 
 
-def filter_events(library_filter='All', type_filters=None, search_term='', start_date='', end_date='', date_filter=''):
+def filter_events(
+    library_filter='All',
+    type_filters=None,
+    search_term='',
+    start_date='',
+    end_date='',
+    date_filter='',
+    search_fields=None,
+    search_mode='any'
+):
     """Apply shared filtering logic used by both JSON API and ICS export."""
     type_filters = type_filters or []
     filtered_events = events_data.copy()
+    search_mode = (search_mode or 'any').lower()
 
     # Apply library filter
     if library_filter and library_filter != 'All':
@@ -91,15 +101,44 @@ def filter_events(library_filter='All', type_filters=None, search_term='', start
 
         filtered_events = [e for e in filtered_events if get_event_types(e) & selected]
 
-    # Apply search filter
+    # Apply search filter with configurable fields and modes
     if search_term:
-        st = search_term.lower().strip()
-        filtered_events = [
-            e for e in filtered_events
-            if st in (e.get('Title', '') or '').lower()
-            or st in (e.get('Description', '') or '').lower()
-            or st in (e.get('Location', '') or '').lower()
-        ]
+        raw = search_term.lower().strip()
+        # Support quoted phrases or space-separated tokens
+        tokens = []
+        for m in re.finditer(r'"([^"]+)"|(\S+)', raw):
+            token = (m.group(1) or m.group(2) or '').strip()
+            if token:
+                tokens.append(token)
+
+        field_alias = {
+            'title': 'Title',
+            'description': 'Description',
+            'location': 'Location',
+            'age': 'Age Group',
+            'age_group': 'Age Group',
+            'type': 'Age Group',
+            'library': 'Library'
+        }
+        selected_fields = []
+        for sf in search_fields or []:
+            key = field_alias.get(sf.lower())
+            if key:
+                selected_fields.append(key)
+        if not selected_fields:
+            selected_fields = ['Title', 'Description', 'Location']
+
+        def matches(ev):
+            values = " ".join(str(ev.get(f, '') or '') for f in selected_fields).lower()
+            if raw and raw in values:
+                return True
+            if not tokens:
+                return True
+            if search_mode == 'all':
+                return all(tok in values for tok in tokens)
+            return any(tok in values for tok in tokens)
+
+        filtered_events = [e for e in filtered_events if matches(e)]
 
     # Date filtering: single date (legacy) or range [start, end]
     # If explicit range provided, prefer that
@@ -277,6 +316,8 @@ def get_events():
     date_filter = request.args.get('date', '').strip()  # legacy single date YYYY-MM-DD
     start_date = request.args.get('start', '').strip()  # YYYY-MM-DD
     end_date = request.args.get('end', '').strip()      # YYYY-MM-DD
+    search_fields = [s.strip() for s in request.args.get('search_fields', '').split(',') if (s or '').strip()]
+    search_mode = request.args.get('search_mode', 'any').lower().strip() or 'any'
 
     filtered_events = filter_events(
         library_filter=library_filter,
@@ -284,7 +325,9 @@ def get_events():
         search_term=search_term,
         start_date=start_date,
         end_date=end_date,
-        date_filter=date_filter
+        date_filter=date_filter,
+        search_fields=search_fields,
+        search_mode=search_mode
     )
 
     return jsonify({
@@ -302,6 +345,8 @@ def download_ics():
     date_filter = request.args.get('date', '').strip()
     start_date = request.args.get('start', '').strip()
     end_date = request.args.get('end', '').strip()
+    search_fields = [s.strip() for s in request.args.get('search_fields', '').split(',') if (s or '').strip()]
+    search_mode = request.args.get('search_mode', 'any').lower().strip() or 'any'
 
     filtered_events = filter_events(
         library_filter=library_filter,
@@ -309,7 +354,9 @@ def download_ics():
         search_term=search_term,
         start_date=start_date,
         end_date=end_date,
-        date_filter=date_filter
+        date_filter=date_filter,
+        search_fields=search_fields,
+        search_mode=search_mode
     )
 
     if not filtered_events:
