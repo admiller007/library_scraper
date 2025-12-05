@@ -65,6 +65,8 @@ EVANSTON_BASE_URL = 'https://evanstonlibrary.bibliocommons.com/v2/events'
 CPL_BASE_URL = 'https://chipublib.bibliocommons.com/v2/events'
 GLENCOE_AJAX_URL = "https://calendar.glencoelibrary.org/ajax/calendar/list"
 GLENCOE_CALENDAR_ID = "19721"
+SKOKIE_PARKS_URL = "https://www.skokieparks.org/events/"
+SKOKIE_PARKS_BASE = "https://www.skokieparks.org"
 
 # Pre-compiled regex patterns for performance
 COMPILED_PATTERNS = {
@@ -847,6 +849,119 @@ async def fetch_glencoe_events() -> List[Dict[str, Any]]:
     logger.info(f"Found {len(events)} events for Glencoe")
     return events
 
+async def _fetch_skokie_parks_page(session) -> str:
+    """Fetch raw HTML for Skokie Park District events."""
+    headers = {"User-Agent": "LibraryScraper/1.0 (+https://github.com/)"}
+    async with REQUESTS_SEM:
+        async with session.get(SKOKIE_PARKS_URL, headers=headers) as resp:
+            resp.raise_for_status()
+            return await resp.text()
+
+def parse_skokie_parks_html(html: str) -> List[Dict[str, Any]]:
+    """Parse the Skokie Park District events listing HTML into event dicts."""
+    if not html:
+        return []
+
+    events = []
+    blocks = re.findall(
+        r'<li[^>]*class="calendar-item"[^>]*>(.*?)</li>',
+        html,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+
+    for block in blocks:
+        try:
+            link_match = re.search(r'<a[^>]+href="([^"]+)"', block)
+            link = link_match.group(1).strip() if link_match else "N/A"
+            if link and not link.startswith("http"):
+                link = f"{SKOKIE_PARKS_BASE.rstrip('/')}/{link.lstrip('/')}"
+
+            raw_text = clean_text(html_to_text(block))
+            if not raw_text:
+                continue
+
+            header_split = re.split(r"\bDate\b", raw_text, maxsplit=1)
+            if len(header_split) < 2:
+                continue
+            header, remainder = header_split[0].strip(), header_split[1].strip()
+
+            title = header
+            title_match = re.match(r"^[A-Za-z]{3,9}\s+\d{1,2}\s+(.*)", header)
+            if title_match:
+                title = title_match.group(1).strip()
+
+            time_split = re.split(r"\bTime\b", remainder, maxsplit=1)
+            date_text = time_split[0].strip()
+            after_time = time_split[1] if len(time_split) > 1 else ""
+
+            loc_split = re.split(r"\bLocation\b", after_time, maxsplit=1)
+            time_text = loc_split[0].strip()
+            location_text = loc_split[1] if len(loc_split) > 1 else ""
+            location_text = location_text.replace("Event Details", "").strip()
+
+            date_match = re.search(r"([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})", date_text)
+            if not date_match:
+                continue
+            raw_date = date_match.group(1)
+
+            dt_obj = None
+            for fmt in ("%B %d, %Y", "%b %d, %Y"):
+                try:
+                    dt_obj = datetime.strptime(raw_date, fmt)
+                    break
+                except ValueError:
+                    continue
+            date_value = dt_obj.strftime("%Y-%m-%d") if dt_obj else raw_date
+
+            time_str = "Not found"
+            for candidate in (time_text, date_text):
+                if re.search(r"all day", candidate, re.IGNORECASE):
+                    time_str = "All Day"
+                    break
+                time_match = re.search(
+                    r"(\d{1,2}:\d{2}\s*[AP]M\s*(?:[-–]\s*\d{1,2}:\d{2}\s*[AP]M)?)",
+                    candidate,
+                    re.IGNORECASE,
+                )
+                if time_match:
+                    time_str = time_match.group(1).replace(" - ", "–").strip()
+                    break
+
+            location_clean = clean_text(location_text) or "Skokie Park District"
+            age_group = extract_age_group(f"{title} {date_text} {location_clean}") or "General"
+            description = "See event page for details"
+
+            events.append({
+                "Library": "Skokie Park District",
+                "Title": title,
+                "Date": date_value,
+                "Time": time_str,
+                "Location": location_clean,
+                "Age Group": age_group,
+                "Program Type": "Not found",
+                "Description": description,
+                "Link": link or "N/A",
+            })
+        except Exception as e:
+            logger.debug(f"Error parsing Skokie Parks event block: {e}")
+            continue
+
+    return events
+
+async def fetch_skokie_parks_events() -> List[Dict[str, Any]]:
+    """Fetch and parse Skokie Park District events from the public listing."""
+    logger.info("Fetching Skokie Park District events...")
+    try:
+        session = await get_http_session()
+        html = await retry_with_backoff(_fetch_skokie_parks_page, session)
+    except Exception as e:
+        logger.error(f"Failed to fetch Skokie Park District events: {e}")
+        return []
+
+    events = parse_skokie_parks_html(html)
+    logger.info(f"Found {len(events)} events for Skokie Park District")
+    return events
+
 # UPDATED: Changed to use AsyncFirecrawl
 async def _fetch_skokie_content(app: AsyncFirecrawl, url: str) -> str:
     """Fetch content from Skokie with error handling."""
@@ -1246,6 +1361,7 @@ async def main():
         fetch_bibliocommons_events("CPL Budlong Woods", CPL_BASE_URL, "locations=16"),
         fetch_libnet_events("Wilmette", "wilmette.libnet.info"),
         fetch_skokie_events(),
+        fetch_skokie_parks_events(),
         fetch_libnet_events("Niles", "nmdl.libnet.info")
     ]
     
@@ -1366,3 +1482,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
