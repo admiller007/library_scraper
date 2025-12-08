@@ -14,6 +14,12 @@ from io import BytesIO
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from ics import Calendar, Event
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import inch
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+from html import escape
 import webbrowser
 import threading
 import time
@@ -172,6 +178,35 @@ def filter_events(
     return filtered_events
 
 
+def group_events(events):
+    """Group events by date -> library -> time for organized exports."""
+    grouped = {}
+    for ev in events:
+        date_obj = parse_event_date(ev.get('Date') or '')
+        date_key = date_obj.strftime("%A, %B %d, %Y") if date_obj else (ev.get('Date') or 'Date TBD')
+        time_val = parse_time_to_sortable(ev.get('Time') or '')
+        lib = ev.get('Library') or 'Unknown Library'
+
+        if date_key not in grouped:
+            grouped[date_key] = {'date_obj': date_obj, 'libraries': {}}
+        libs = grouped[date_key]['libraries']
+        libs.setdefault(lib, []).append((time_val, ev))
+
+    ordered_dates = sorted(
+        grouped.items(),
+        key=lambda kv: (
+            kv[1]['date_obj'] is None,
+            kv[1]['date_obj'] or date.max
+        )
+    )
+
+    for _, payload in ordered_dates:
+        for lib_name, items in payload['libraries'].items():
+            payload['libraries'][lib_name] = sorted(items, key=lambda t: t[0])
+
+    return ordered_dates
+
+
 def slugify(text: str) -> str:
     """Turn user-facing labels into safe filename fragments."""
     return re.sub(r'[^A-Za-z0-9]+', '_', text or '').strip('_') or 'events'
@@ -242,6 +277,68 @@ def events_to_ics(events, filename_prefix="library_events") -> tuple[str, str]:
 
     filename = f"{filename_prefix}.ics"
     return cal.serialize(), filename
+
+
+def events_to_pdf(events, filename_prefix="library_events") -> tuple[BytesIO, str]:
+    """Create a PDF organized by day, library, then time for the given events."""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        leftMargin=0.75 * inch,
+        rightMargin=0.75 * inch,
+        topMargin=0.75 * inch,
+        bottomMargin=0.75 * inch,
+        title="Library Events"
+    )
+
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name="Meta", parent=styles["Normal"], textColor=colors.grey, fontSize=9))
+    styles.add(ParagraphStyle(name="Small", parent=styles["Normal"], fontSize=9))
+
+    story = [
+        Paragraph("Library Events", styles["Title"]),
+        Spacer(1, 0.2 * inch)
+    ]
+
+    grouped = group_events(events)
+    if not grouped:
+        story.append(Paragraph("No events available for export.", styles["Normal"]))
+    else:
+        for date_label, payload in grouped:
+            story.append(Paragraph(escape(date_label), styles["Heading2"]))
+            story.append(Spacer(1, 0.05 * inch))
+
+            for library_name in sorted(payload['libraries'].keys()):
+                story.append(Paragraph(escape(library_name), styles["Heading3"]))
+
+                for _time_value, ev in payload['libraries'][library_name]:
+                    title = escape(ev.get('Title') or 'Untitled Event')
+                    time_str = escape(ev.get('Time') or 'Time TBD')
+                    location = escape(ev.get('Location') or 'Location TBD')
+                    age = escape(ev.get('Age Group') or 'All Ages')
+                    description = ev.get('Description')
+                    link = ev.get('Link')
+
+                    story.append(Paragraph(title, styles["Heading4"]))
+                    meta = f"{time_str} | {location} | Age: {age}"
+                    story.append(Paragraph(meta, styles["Meta"]))
+
+                    if description and description != 'Not found':
+                        story.append(Paragraph(escape(description), styles["Normal"]))
+
+                    if link and link not in ('N/A', ''):
+                        story.append(Paragraph(f"Link: <a href='{escape(link)}'>{escape(link)}</a>", styles["Small"]))
+
+                    story.append(Spacer(1, 0.18 * inch))
+
+                story.append(Spacer(1, 0.1 * inch))
+
+            story.append(Spacer(1, 0.15 * inch))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer, f"{filename_prefix}.pdf"
 
 def load_latest_csv():
     """Load the most recent CSV file"""
@@ -374,6 +471,48 @@ def download_ics():
     return send_file(
         buffer,
         mimetype='text/calendar',
+        as_attachment=True,
+        download_name=filename
+    )
+
+
+@app.route('/api/pdf')
+def download_pdf():
+    """Download a PDF organized by day, then library, then time, honoring any filters."""
+    library_filter = request.args.get('library', 'All')
+    type_filters = [t.strip() for t in request.args.getlist('type') if (t or '').strip()]
+    search_term = request.args.get('search', '').lower().strip()
+    date_filter = request.args.get('date', '').strip()
+    start_date = request.args.get('start', '').strip()
+    end_date = request.args.get('end', '').strip()
+    search_fields = [s.strip() for s in request.args.get('search_fields', '').split(',') if (s or '').strip()]
+    search_mode = request.args.get('search_mode', 'any').lower().strip() or 'any'
+
+    filtered_events = filter_events(
+        library_filter=library_filter,
+        type_filters=type_filters,
+        search_term=search_term,
+        start_date=start_date,
+        end_date=end_date,
+        date_filter=date_filter,
+        search_fields=search_fields,
+        search_mode=search_mode
+    )
+
+    if not filtered_events:
+        return jsonify({'error': 'No events available for PDF export'}), 404
+
+    filename_parts = ["library_events"]
+    if library_filter and library_filter != 'All':
+        filename_parts.append(slugify(library_filter))
+    if start_date or end_date:
+        filename_parts.append("_".join(filter(None, [start_date, end_date])))
+
+    buffer, filename = events_to_pdf(filtered_events, "_".join(filter(None, filename_parts)))
+
+    return send_file(
+        buffer,
+        mimetype='application/pdf',
         as_attachment=True,
         download_name=filename
     )
