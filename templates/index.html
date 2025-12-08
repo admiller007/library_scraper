@@ -76,6 +76,12 @@
         .ics-btn:hover {
             opacity: 0.9;
         }
+        .pdf-btn {
+            background: #e67e22 !important;
+        }
+        .pdf-btn:hover {
+            opacity: 0.9;
+        }
         .ghost-btn {
             background: #ecf0f1 !important;
             color: #2c3e50;
@@ -297,6 +303,7 @@
                 <button onclick="applyFilters()">Apply Filters</button>
                 <button onclick="refreshData()" class="refresh-btn">Refresh Data</button>
                 <button type="button" onclick="chooseAndDownloadIcs()" class="ics-btn">Download .ics</button>
+                <button type="button" onclick="chooseAndDownloadPdf()" class="ics-btn pdf-btn">Download PDF</button>
             </div>
         </div>
         
@@ -514,6 +521,43 @@
                 : `No filters applied. Download all ${allEvents.length} events?`;
             const useFiltered = confirm(message);
             await downloadIcs(useFiltered && hasFilters);
+        }
+
+        async function downloadPdf(useFilters = true) {
+            updateStatus('Preparing PDF download...');
+            const state = getFilterState();
+            const query = useFilters ? buildQueryString(state) : '';
+            const url = `/api/pdf${query ? '?' + query : ''}`;
+
+            try {
+                const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error('Failed to generate PDF');
+                }
+                const blob = await response.blob();
+                const downloadUrl = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                const disposition = response.headers.get('Content-Disposition') || '';
+                const match = /filename=\"?([^\";]+)\"?/i.exec(disposition);
+                a.href = downloadUrl;
+                a.download = match ? match[1] : 'library_events.pdf';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(downloadUrl);
+                updateStatus(useFilters ? 'Downloaded filtered events as PDF' : 'Downloaded all events as PDF');
+            } catch (error) {
+                updateStatus('PDF download failed: ' + error.message);
+            }
+        }
+
+        async function chooseAndDownloadPdf() {
+            const hasFilters = filteredEvents.length && filteredEvents.length !== allEvents.length;
+            const message = hasFilters
+                ? `Download only the ${filteredEvents.length} filtered events? Click Cancel to download all ${allEvents.length}.`
+                : `No filters applied. Download all ${allEvents.length} events?`;
+            const useFiltered = confirm(message);
+            await downloadPdf(useFiltered && hasFilters);
         }
 
         function displayEvents(events, state = lastFilterState) {
