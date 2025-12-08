@@ -67,6 +67,7 @@ GLENCOE_AJAX_URL = "https://calendar.glencoelibrary.org/ajax/calendar/list"
 GLENCOE_CALENDAR_ID = "19721"
 SKOKIE_PARKS_URL = "https://www.skokieparks.org/events/"
 SKOKIE_PARKS_BASE = "https://www.skokieparks.org"
+FPDCC_EVENTS_API = "https://fpdcc.com/wp-json/tribe/events/v1/events"
 
 # Pre-compiled regex patterns for performance
 COMPILED_PATTERNS = {
@@ -1128,9 +1129,135 @@ async def fetch_skokie_events() -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Error parsing Skokie markdown: {e}")
         return []
-        
+
     logger.info(f"Found {len(all_events)} events for Skokie")
     return all_events
+
+async def _fetch_fpdcc_page(session, page: int, start_date: str, end_date: str) -> Dict[str, Any]:
+    """Fetch a single page of Forest Preserves events."""
+    params = {
+        "page": page,
+        "per_page": 50,
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+    headers = {"User-Agent": "LibraryScraper/1.0 (+https://github.com/)"}
+    async with REQUESTS_SEM:
+        async with session.get(FPDCC_EVENTS_API, params=params, headers=headers) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+def _build_fpdcc_location(item: Dict[str, Any]) -> str:
+    """Create a readable location string from the Forest Preserves event payload."""
+    parts: List[str] = []
+
+    def _add(val: Any):
+        text = clean_text(val)
+        if text and text not in parts:
+            parts.append(text)
+
+    venue = item.get("venue")
+    if isinstance(venue, dict):
+        _add(venue.get("venue") or venue.get("name"))
+        for key in ("address", "city", "state", "zip", "country"):
+            _add(venue.get(key))
+    else:
+        _add(venue)
+
+    for key in ("location", "address", "city", "state", "zip", "country"):
+        _add(item.get(key))
+
+    return ", ".join([p for p in parts if p]) or "Forest Preserves of Cook County"
+
+def _parse_fpdcc_datetime(raw_value: Any) -> datetime | None:
+    """Parse Forest Preserves start/end datetime strings into a datetime object."""
+    if not raw_value:
+        return None
+    if isinstance(raw_value, datetime):
+        return raw_value
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(str(raw_value), fmt)
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(str(raw_value))
+    except Exception:
+        return None
+
+async def fetch_fpdcc_events() -> List[Dict[str, Any]]:
+    """Fetch events from the Forest Preserves of Cook County site."""
+    logger.info("Fetching Forest Preserves events...")
+
+    # Ensure we have a date window to query
+    start_str = START_DATE or compute_date_window()[0]
+    days = DAYS_TO_FETCH or DEFAULT_DAYS_TO_FETCH
+    try:
+        start_dt = datetime.strptime(start_str, "%Y-%m-%d")
+    except ValueError:
+        logger.warning(f"Invalid START_DATE '{start_str}', defaulting to today")
+        start_dt = datetime.now()
+        start_str = start_dt.strftime("%Y-%m-%d")
+    end_dt = start_dt + timedelta(days=max(days - 1, 0))
+    end_str = end_dt.strftime("%Y-%m-%d")
+
+    try:
+        session = await get_http_session()
+        page = 1
+        events: List[Dict[str, Any]] = []
+        total_pages = 1
+
+        while page <= total_pages:
+            try:
+                data = await retry_with_backoff(_fetch_fpdcc_page, session, page, start_str, end_str)
+            except Exception as e:
+                logger.error(f"Failed to fetch FPDCC page {page}: {e}")
+                break
+
+            page_events = data.get("events") or data.get("data") or []
+            total_pages = data.get("total_pages") or data.get("totalPages") or total_pages
+
+            for item in page_events:
+                try:
+                    title = clean_text(item.get("title")) or "Untitled Event"
+                    description = html_to_text(item.get("description", "")) or "Not found"
+                    link = item.get("url") or item.get("link") or "N/A"
+                    all_day = bool(item.get("all_day") or item.get("allDay"))
+
+                    start_value = _parse_fpdcc_datetime(item.get("start_date") or item.get("start"))
+                    if not start_value:
+                        continue
+
+                    date_value = start_value.strftime("%Y-%m-%d")
+                    time_value = "All Day" if all_day else start_value.strftime("%I:%M %p").lstrip("0")
+
+                    location = _build_fpdcc_location(item)
+                    age_group = extract_age_group(f"{title} {description}")
+
+                    events.append({
+                        "Library": "Forest Preserves of Cook County",
+                        "Title": title,
+                        "Date": date_value,
+                        "Time": time_value,
+                        "Location": location,
+                        "Age Group": age_group,
+                        "Program Type": "Not found",
+                        "Description": description,
+                        "Link": link,
+                    })
+                except Exception as e:
+                    logger.debug(f"Error parsing FPDCC event: {e}")
+                    continue
+
+            if not page_events:
+                break
+            page += 1
+
+        logger.info(f"Found {len(events)} events for Forest Preserves")
+        return events
+    except Exception as e:
+        logger.error(f"Unexpected error fetching FPDCC events: {e}")
+        return []
 
 # --- REPORT GENERATORS ---
 
@@ -1362,6 +1489,7 @@ async def main():
         fetch_libnet_events("Wilmette", "wilmette.libnet.info"),
         fetch_skokie_events(),
         fetch_skokie_parks_events(),
+        fetch_fpdcc_events(),
         fetch_libnet_events("Niles", "nmdl.libnet.info")
     ]
     
