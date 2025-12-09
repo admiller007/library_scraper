@@ -371,8 +371,8 @@
         <div class="header">
             <h1>📚 Library Events Viewer</h1>
             <p>
-                Total Events: {{ total_events }}
-                {% if csv_file %}| Loaded from: {{ csv_file }}{% endif %}
+                Total Events: <span id="total-events-count">{{ total_events }}</span>
+                {% if csv_file %}| Loaded from: <span id="csv-file-name">{{ csv_file }}</span>{% endif %}
             </p>
         </div>
 
@@ -563,8 +563,9 @@
                 allEvents = data.events;
                 displayEvents(allEvents);
                 updateStatus(`Showing ${data.total} events`);
+                updateTotalEventsCount(data.total);
             } catch (error) {
-                document.getElementById('events-grid').innerHTML = 
+                document.getElementById('events-grid').innerHTML =
                     '<div class="no-events">Error loading events: ' + error.message + '</div>';
                 updateStatus('Error loading events');
             }
@@ -784,6 +785,9 @@
 
                 if (result.success) {
                     updateStatus(result.message);
+                    if (result.total_events !== undefined) {
+                        updateTotalEventsCount(result.total_events);
+                    }
                     await loadEvents();
                     await applyFilters();
                 } else {
@@ -822,6 +826,13 @@
 
         function updateStatus(message) {
             document.getElementById('status').textContent = message;
+        }
+
+        function updateTotalEventsCount(count) {
+            const countElement = document.getElementById('total-events-count');
+            if (countElement) {
+                countElement.textContent = count;
+            }
         }
 
         function escapeHtml(text) {
