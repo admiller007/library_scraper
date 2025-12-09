@@ -1,392 +1,97 @@
 <!DOCTYPE html>
-<html lang="en">
+<html class="light" lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Library Events Viewer</title>
+    <title>Chicago Library Events</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#137fec",
+                        "background-light": "#f6f7f8",
+                        "background-dark": "#101922",
+                    },
+                    fontFamily: {
+                        "display": ["Inter", "sans-serif"]
+                    },
+                    borderRadius: {"DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px"},
+                },
+            },
+        }
+    </script>
     <style>
-        * {
-            box-sizing: border-box;
+        .material-symbols-outlined {
+            font-variation-settings:
+            'FILL' 0,
+            'wght' 400,
+            'GRAD' 0,
+            'opsz' 24
         }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-            margin: 0;
-            padding: 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
+        .checkbox-container {
+            max-height: 150px;
+            overflow-y: auto;
+            scrollbar-width: thin;
         }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 16px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            overflow: hidden;
+        .checkbox-container::-webkit-scrollbar {
+            width: 6px;
         }
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 32px 28px;
+        .checkbox-container::-webkit-scrollbar-track {
+            background: #f1f5f9;
         }
-        .header h1 {
-            margin: 0;
-            font-size: 32px;
-            font-weight: 700;
-            letter-spacing: -0.5px;
-        }
-        .header p {
-            margin: 12px 0 0 0;
-            opacity: 0.95;
-            font-size: 15px;
-            font-weight: 400;
-        }
-        .controls {
-            padding: 24px 28px;
-            background: #fafbfc;
-            border-bottom: 1px solid #e1e4e8;
-        }
-        .filter-row {
-            display: flex;
-            gap: 12px;
-            align-items: center;
-            flex-wrap: wrap;
-            margin-bottom: 16px;
-        }
-        .filter-row:last-child {
-            margin-bottom: 0;
-        }
-        .filter-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .filter-item label {
-            font-weight: 500;
-            color: #24292e;
-            font-size: 14px;
-            white-space: nowrap;
-        }
-        .filter-item select, .filter-item input[type="text"], .filter-item input[type="date"] {
-            padding: 8px 12px;
-            border: 1px solid #d1d5da;
-            border-radius: 6px;
-            font-size: 14px;
-            background: white;
-            transition: border-color 0.2s, box-shadow 0.2s;
-            outline: none;
-        }
-        .filter-item select:focus, .filter-item input:focus {
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
-        }
-        .filter-item input[type="text"] {
-            min-width: 280px;
-        }
-        .btn {
-            padding: 8px 16px;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 500;
-            transition: all 0.2s;
-            white-space: nowrap;
-        }
-        .btn-primary {
-            background: #667eea;
-            color: white;
-        }
-        .btn-primary:hover {
-            background: #5568d3;
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-        }
-        .btn-success {
-            background: #28a745;
-            color: white;
-        }
-        .btn-success:hover {
-            background: #218838;
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(40, 167, 69, 0.4);
-        }
-        .btn-secondary {
-            background: #6c757d;
-            color: white;
-        }
-        .btn-secondary:hover {
-            background: #5a6268;
-        }
-        .btn-outline {
-            background: white;
-            color: #586069;
-            border: 1px solid #d1d5da;
-        }
-        .btn-outline:hover {
-            background: #f6f8fa;
-            border-color: #c1c5ca;
-        }
-        .btn-group {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-        .divider {
-            height: 1px;
-            background: #e1e4e8;
-            margin: 16px 0;
-        }
-        .advanced-toggle {
-            color: #667eea;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 500;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 0;
-            transition: color 0.2s;
-        }
-        .advanced-toggle:hover {
-            color: #5568d3;
-        }
-        .advanced-toggle::before {
-            content: '▼';
-            display: inline-block;
-            transition: transform 0.2s;
-            font-size: 10px;
-        }
-        .advanced-toggle.collapsed::before {
-            transform: rotate(-90deg);
-        }
-        .advanced-filters {
-            margin-top: 16px;
-            padding-top: 16px;
-            border-top: 1px solid #e1e4e8;
-        }
-        .advanced-filters.hidden {
-            display: none;
-        }
-        .type-checkboxes {
-            max-height: none;
-            border: 1px solid #d1d5da;
-            padding: 12px;
-            border-radius: 6px;
-            background: white;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px;
-        }
-        .type-checkboxes label {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 14px;
-            color: #24292e;
-            font-weight: 400;
-            white-space: nowrap;
-            cursor: pointer;
-        }
-        .type-checkboxes input[type="checkbox"] {
-            cursor: pointer;
-        }
-        .events-container {
-            padding: 28px;
-        }
-        .events-grid {
-            display: grid;
-            gap: 16px;
-        }
-        .event-card {
-            border: 1px solid #e1e4e8;
-            border-radius: 8px;
-            padding: 20px;
-            background: white;
-            transition: all 0.2s;
-        }
-        .event-card:hover {
-            box-shadow: 0 8px 24px rgba(102, 126, 234, 0.15);
-            border-color: #667eea;
-            transform: translateY(-2px);
-        }
-        .event-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            margin-bottom: 14px;
-            gap: 12px;
-        }
-        .event-title {
-            font-weight: 600;
-            color: #24292e;
-            font-size: 18px;
-            margin: 0;
-            line-height: 1.3;
-        }
-        .event-library {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 6px 12px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 600;
-            white-space: nowrap;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        .event-meta {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 10px;
-            margin-bottom: 14px;
-            font-size: 14px;
-            color: #586069;
-        }
-        .event-meta span {
-            display: flex;
-            align-items: center;
-        }
-        .event-meta .icon {
-            margin-right: 8px;
-            font-size: 16px;
-        }
-        .event-description {
-            color: #586069;
-            line-height: 1.6;
-            margin-bottom: 14px;
-            font-size: 14px;
-        }
-        .event-link {
-            text-align: right;
-        }
-        .event-link a {
-            color: #667eea;
-            text-decoration: none;
-            font-size: 14px;
-            font-weight: 500;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-        }
-        .event-link a:hover {
-            color: #5568d3;
-            text-decoration: underline;
-        }
-        .status-bar {
-            padding: 16px 28px;
-            background: #fafbfc;
-            border-top: 1px solid #e1e4e8;
-            color: #586069;
-            font-size: 14px;
-        }
-        .loading {
-            text-align: center;
-            padding: 60px 20px;
-            color: #586069;
-            font-size: 16px;
-        }
-        .no-events {
-            text-align: center;
-            padding: 60px 20px;
-            color: #959da5;
-            font-size: 16px;
-        }
-        .search-options {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-            font-size: 13px;
-            color: #586069;
-            padding: 12px;
-            background: #f6f8fa;
-            border-radius: 6px;
-            border: 1px solid #e1e4e8;
-        }
-        .search-options label {
-            font-weight: 400;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            cursor: pointer;
-        }
-        .search-options input[type="checkbox"] {
-            cursor: pointer;
-        }
-        .search-options .search-hint {
-            font-size: 12px;
-            color: #959da5;
-            font-style: italic;
-            margin-left: auto;
-        }
-        mark {
-            background: #fff3cd;
-            color: #856404;
-            padding: 2px 4px;
+        .checkbox-container::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
             border-radius: 3px;
-            font-weight: 500;
-        }
-        @media (max-width: 768px) {
-            body {
-                padding: 10px;
-            }
-            .container {
-                border-radius: 12px;
-            }
-            .header {
-                padding: 24px 20px;
-            }
-            .header h1 {
-                font-size: 24px;
-            }
-            .controls {
-                padding: 20px;
-            }
-            .events-container {
-                padding: 20px;
-            }
-            .filter-row {
-                flex-direction: column;
-                align-items: stretch;
-            }
-            .filter-item {
-                flex-direction: column;
-                align-items: stretch;
-            }
-            .filter-item input[type="text"] {
-                min-width: 100%;
-            }
-            .event-header {
-                flex-direction: column;
-                gap: 10px;
-            }
-            .event-meta {
-                grid-template-columns: 1fr;
-            }
         }
     </style>
 </head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>📚 Library Events Viewer</h1>
-            <p>
-                Total Events: <span id="total-events-count">{{ total_events }}</span>
-                {% if csv_file %}| Loaded from: <span id="csv-file-name">{{ csv_file }}</span>{% endif %}
-            </p>
-        </div>
-
-        <div class="controls">
-            <!-- Primary Filters -->
-            <div class="filter-row">
-                <div class="filter-item">
-                    <label for="search-input">Search</label>
-                    <input type="text" id="search-input" placeholder="Search events..." aria-label="Search events">
+<body class="font-display bg-background-light dark:bg-background-dark min-h-screen">
+    <div class="relative flex h-auto min-h-screen w-full flex-col">
+        <!-- Header -->
+        <header class="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-background-dark/80 backdrop-blur-sm px-6 py-4">
+            <div class="flex items-center gap-3">
+                <span class="material-symbols-outlined text-primary text-2xl">local_library</span>
+                <div>
+                    <h1 class="text-slate-800 dark:text-slate-200 text-xl font-bold">Chicago Library Events</h1>
+                    <p class="text-slate-600 dark:text-slate-400 text-sm">
+                        Total Events: {{ total_events }}
+                        {% if csv_file %}• Loaded from: {{ csv_file }}{% endif %}
+                    </p>
                 </div>
+            </div>
+            <div class="flex gap-3">
+                <button onclick="downloadICS()"
+                        class="inline-flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition-colors">
+                    <span class="material-symbols-outlined text-lg">calendar_month</span>
+                    Download ICS
+                </button>
+                <button onclick="downloadPDF()"
+                        class="inline-flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors">
+                    <span class="material-symbols-outlined text-lg">picture_as_pdf</span>
+                    Download PDF
+                </button>
+                <button onclick="refreshData()"
+                        id="refresh-btn"
+                        class="inline-flex items-center gap-2 px-4 py-2 bg-primary hover:bg-blue-600 text-white rounded-lg font-medium transition-colors">
+                    <span class="material-symbols-outlined text-lg">refresh</span>
+                    Refresh Data
+                </button>
+            </div>
+        </header>
 
-                <div class="filter-item">
-                    <label for="library-filter">Library</label>
-                    <select id="library-filter">
+        <!-- Filters Section -->
+        <div class="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-6 py-4">
+            <div class="grid grid-cols-1 lg:grid-cols-4 xl:grid-cols-6 gap-4 items-end">
+                <!-- Library Filter -->
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Library</label>
+                    <select id="library-filter"
+                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-primary focus:border-primary">
                         <option value="All">All Libraries</option>
                         {% for library in libraries %}
                         <option value="{{ library }}">{{ library }}</option>
@@ -394,9 +99,37 @@
                     </select>
                 </div>
 
-                <div class="filter-item">
-                    <label for="date-preset">Date Range</label>
-                    <select id="date-preset">
+                <!-- Age Group Filter -->
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Age Groups</label>
+                    <div class="border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 p-3 checkbox-container">
+                        {% if types %}
+                            {% for t in types %}
+                            <label class="flex items-center text-sm text-slate-700 dark:text-slate-300 mb-2 last:mb-0 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 px-2 py-1 rounded">
+                                <input type="checkbox" name="type" value="{{ t }}"
+                                       class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary mr-2">
+                                <span class="truncate">{{ t }}</span>
+                            </label>
+                            {% endfor %}
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Search -->
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Search</label>
+                    <div class="relative">
+                        <span class="material-symbols-outlined absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 text-lg">search</span>
+                        <input type="text" id="search-input" placeholder="Search events..."
+                               class="w-full pl-10 pr-4 py-2 border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-primary focus:border-primary">
+                    </div>
+                </div>
+
+                <!-- Date Preset -->
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Date Range</label>
+                    <select id="date-preset"
+                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-primary focus:border-primary">
                         <option value="all">All Dates</option>
                         <option value="today">Today</option>
                         <option value="tomorrow">Tomorrow</option>
@@ -408,100 +141,62 @@
                         <option value="custom">Custom Range</option>
                     </select>
                 </div>
-            </div>
 
-            <!-- Custom Date Range (shown when custom is selected) -->
-            <div id="custom-date-range" class="filter-row" style="display:none;">
-                <div class="filter-item">
-                    <label for="start-date">Start Date</label>
-                    <input type="date" id="start-date" {% if min_date %}min="{{ min_date }}"{% endif %} {% if max_date %}max="{{ max_date }}"{% endif %}>
-                </div>
-                <div class="filter-item">
-                    <label for="end-date">End Date</label>
-                    <input type="date" id="end-date" {% if min_date %}min="{{ min_date }}"{% endif %} {% if max_date %}max="{{ max_date }}"{% endif %}>
-                </div>
-                <button type="button" id="clear-range-btn" class="btn btn-outline">Clear Range</button>
-            </div>
-
-            <!-- Action Buttons -->
-            <div class="filter-row">
-                <div class="btn-group">
-                    <button onclick="applyFilters()" class="btn btn-primary">Apply Filters</button>
-                    <button onclick="refreshData()" class="btn btn-success">Refresh Data</button>
-                </div>
-                <div class="btn-group" style="margin-left: auto;">
-                    <button type="button" onclick="chooseAndDownloadIcs()" class="btn btn-secondary">Download .ics</button>
-                    <button type="button" onclick="chooseAndDownloadPdf()" class="btn btn-secondary">Download PDF</button>
-                </div>
-            </div>
-
-            <!-- Advanced Filters Toggle -->
-            <div class="divider"></div>
-            <span class="advanced-toggle collapsed" id="advanced-toggle" onclick="toggleAdvancedFilters()">
-                Advanced Filters
-            </span>
-
-            <!-- Advanced Filters (collapsible) -->
-            <div class="advanced-filters hidden" id="advanced-filters">
-                <div class="filter-row">
-                    <div class="filter-item" style="flex: 1;">
-                        <label>Event Type</label>
-                        <div id="type-checkboxes" class="type-checkboxes">
-                            {% if types %}
-                                {% for t in types %}
-                                <label>
-                                    <input type="checkbox" name="type" value="{{ t }}"> {{ t }}
-                                </label>
-                                {% endfor %}
-                            {% endif %}
+                <!-- Custom Date Range (Hidden by default) -->
+                <div id="custom-date-range" class="hidden col-span-2">
+                    <div class="grid grid-cols-2 gap-2">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Start Date</label>
+                            <input type="date" id="start-date"
+                                   {% if min_date %}min="{{ min_date }}"{% endif %}
+                                   {% if max_date %}max="{{ max_date }}"{% endif %}
+                                   class="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-primary focus:border-primary">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">End Date</label>
+                            <input type="date" id="end-date"
+                                   {% if min_date %}min="{{ min_date }}"{% endif %}
+                                   {% if max_date %}max="{{ max_date }}"{% endif %}
+                                   class="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-primary focus:border-primary">
                         </div>
                     </div>
                 </div>
 
-                <div class="filter-row">
-                    <div class="search-options" style="flex: 1;">
-                        <span style="font-weight: 500;">Search in:</span>
-                        <label><input type="checkbox" class="search-field" value="title" checked> Title</label>
-                        <label><input type="checkbox" class="search-field" value="description" checked> Description</label>
-                        <label><input type="checkbox" class="search-field" value="location" checked> Location</label>
-                        <label><input type="checkbox" class="search-field" value="age" checked> Age Group</label>
-                        <label><input type="checkbox" class="search-field" value="library"> Library</label>
-                        <span style="margin-left: 16px; font-weight: 500;">Match:</span>
-                        <select id="search-mode" style="padding: 4px 8px; border: 1px solid #d1d5da; border-radius: 4px; font-size: 13px;">
-                            <option value="any">Any word</option>
-                            <option value="all">All words</option>
-                        </select>
-                        <span class="search-hint">Tip: use quotes for phrases (e.g., "story time")</span>
-                    </div>
+                <!-- Apply Filters Button -->
+                <div class="lg:col-span-1">
+                    <button onclick="applyFilters()"
+                            class="w-full px-4 py-2 bg-primary hover:bg-blue-600 text-white rounded-lg font-medium transition-colors inline-flex items-center justify-center gap-2">
+                        <span class="material-symbols-outlined text-lg">filter_list</span>
+                        Apply Filters
+                    </button>
                 </div>
             </div>
         </div>
-        
-        <div class="events-container">
-            <div id="events-grid" class="events-grid">
-                <div class="loading">Loading events...</div>
+
+        <!-- Events Grid -->
+        <main class="flex-1 p-6">
+            <div id="events-grid" class="grid gap-6 grid-cols-1 lg:grid-cols-2 xl:grid-cols-3">
+                <div class="col-span-full text-center py-12">
+                    <div class="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full mx-auto mb-4"></div>
+                    <p class="text-slate-600 dark:text-slate-400">Loading events...</p>
+                </div>
             </div>
-        </div>
-        
-        <div class="status-bar">
-            <span id="status">Ready</span>
-        </div>
+        </main>
+
+        <!-- Status Bar -->
+        <footer class="border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-6 py-3">
+            <div class="flex items-center justify-between">
+                <span id="status" class="text-sm text-slate-600 dark:text-slate-400">Ready</span>
+                <div class="text-xs text-slate-500 dark:text-slate-500">
+                    Last updated: <span id="last-updated">Loading...</span>
+                </div>
+            </div>
+        </footer>
     </div>
 
     <script>
         let allEvents = [];
         let filteredEvents = [];
-        let lastFilterState = null;
-        let searchDebounce = null;
-
-        // Toggle advanced filters
-        function toggleAdvancedFilters() {
-            const toggle = document.getElementById('advanced-toggle');
-            const filters = document.getElementById('advanced-filters');
-
-            toggle.classList.toggle('collapsed');
-            filters.classList.toggle('hidden');
-        }
 
         // Load events on page load
         document.addEventListener('DOMContentLoaded', function() {
@@ -521,39 +216,29 @@
             } else {
                 preset.value = 'all';
             }
+
             // Toggle custom range UI
             preset.addEventListener('change', function() {
                 const show = preset.value === 'custom';
-                document.getElementById('custom-date-range').style.display = show ? 'inline-flex' : 'none';
+                const customRange = document.getElementById('custom-date-range');
+                if (show) {
+                    customRange.classList.remove('hidden');
+                } else {
+                    customRange.classList.add('hidden');
+                }
             });
-            // Clear range button
-            document.getElementById('clear-range-btn').addEventListener('click', function() {
-                startInput.value = '';
-                endInput.value = '';
-                applyFilters();
-            });
-
-            const searchInput = document.getElementById('search-input');
-            const searchFields = document.querySelectorAll('.search-field');
-            const searchMode = document.getElementById('search-mode');
-
-            const triggerSearch = () => {
-                clearTimeout(searchDebounce);
-                searchDebounce = setTimeout(() => applyFilters(), 250);
-            };
-
-            searchInput.addEventListener('input', triggerSearch);
-            searchMode.addEventListener('change', applyFilters);
-            searchFields.forEach(cb => cb.addEventListener('change', applyFilters));
 
             loadEvents().then(() => applyFilters());
-            
+
             // Add enter key support for search
             document.getElementById('search-input').addEventListener('keypress', function(e) {
                 if (e.key === 'Enter') {
                     applyFilters();
                 }
             });
+
+            // Update last updated time
+            document.getElementById('last-updated').textContent = new Date().toLocaleString();
         });
 
         async function loadEvents() {
@@ -563,54 +248,40 @@
                 allEvents = data.events;
                 displayEvents(allEvents);
                 updateStatus(`Showing ${data.total} events`);
-                updateTotalEventsCount(data.total);
             } catch (error) {
                 document.getElementById('events-grid').innerHTML =
-                    '<div class="no-events">Error loading events: ' + error.message + '</div>';
+                    `<div class="col-span-full text-center py-12">
+                        <span class="material-symbols-outlined text-4xl text-red-500 mb-4 block">error</span>
+                        <p class="text-slate-600 dark:text-slate-400">Error loading events: ${error.message}</p>
+                    </div>`;
                 updateStatus('Error loading events');
             }
         }
 
         async function applyFilters() {
-            const state = getFilterState();
-            lastFilterState = state;
-            
-            updateStatus('Filtering events...');
-            
-            try {
-                const url = `/api/events?${buildQueryString(state)}`;
-                const response = await fetch(url);
-                const data = await response.json();
-                filteredEvents = data.events;
-                displayEvents(filteredEvents, state);
-                const dateNote = state.note ? ` ${state.note}` : '';
-                const searchNote = state.searchTokens.length ? ` | Search: ${state.search}` : '';
-                updateStatus(`Showing ${data.total} of ${allEvents.length} events${dateNote}${searchNote}`);
-            } catch (error) {
-                updateStatus('Error filtering events');
-            }
-        }
-
-        function getFilterState() {
             const library = document.getElementById('library-filter').value;
-            const typeSelected = Array.from(document.querySelectorAll('#type-checkboxes input[type="checkbox"]:checked')).map(cb => cb.value);
+            const typeSelected = Array.from(document.querySelectorAll('input[name="type"]:checked')).map(cb => cb.value);
             const search = document.getElementById('search-input').value;
             const preset = document.getElementById('date-preset').value;
             const startInput = document.getElementById('start-date');
             const endInput = document.getElementById('end-date');
             const { startIso, endIso, note } = computeDateRange(preset, startInput.value, endInput.value);
-            const searchFields = Array.from(document.querySelectorAll('.search-field:checked')).map(cb => cb.value);
-            const searchMode = document.getElementById('search-mode').value || 'any';
-            const searchTokens = parseSearchTokens(search);
-            return { library, typeSelected, search, searchFields, searchMode, searchTokens, startIso, endIso, note };
-        }
 
-        function buildQueryString(state) {
-            const typeParams = state.typeSelected.map(t => `&type=${encodeURIComponent(t)}`).join('');
-            const rangeParams = (state.startIso ? `&start=${encodeURIComponent(state.startIso)}` : '') + (state.endIso ? `&end=${encodeURIComponent(state.endIso)}` : '');
-            const fieldsParam = state.searchFields.length ? `&search_fields=${encodeURIComponent(state.searchFields.join(','))}` : '';
-            const modeParam = state.searchMode ? `&search_mode=${encodeURIComponent(state.searchMode)}` : '';
-            return `library=${encodeURIComponent(state.library)}${typeParams}&search=${encodeURIComponent(state.search)}${rangeParams}${fieldsParam}${modeParam}`;
+            updateStatus('Filtering events...');
+
+            try {
+                const typeParams = typeSelected.map(t => `&type=${encodeURIComponent(t)}`).join('');
+                const rangeParams = (startIso ? `&start=${encodeURIComponent(startIso)}` : '') + (endIso ? `&end=${encodeURIComponent(endIso)}` : '');
+                const url = `/api/events?library=${encodeURIComponent(library)}${typeParams}&search=${encodeURIComponent(search)}${rangeParams}`;
+                const response = await fetch(url);
+                const data = await response.json();
+                filteredEvents = data.events;
+                displayEvents(filteredEvents);
+                const dateNote = note ? ` ${note}` : '';
+                updateStatus(`Showing ${data.total} of ${allEvents.length} events${dateNote}`);
+            } catch (error) {
+                updateStatus('Error filtering events');
+            }
         }
 
         function computeDateRange(preset, customStart, customEnd) {
@@ -660,124 +331,125 @@
             return { startIso: start ? toISO(start) : '', endIso: end ? toISO(end) : '', note };
         }
 
-        async function downloadIcs(useFilters = true) {
-            updateStatus('Preparing .ics download...');
-            const state = getFilterState();
-            const query = useFilters ? buildQueryString(state) : '';
-            const url = `/api/ics${query ? '?' + query : ''}`;
-
-            try {
-                const response = await fetch(url);
-                if (!response.ok) {
-                    throw new Error('Failed to generate .ics file');
-                }
-                const blob = await response.blob();
-                const downloadUrl = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                const disposition = response.headers.get('Content-Disposition') || '';
-                const match = /filename=\"?([^\";]+)\"?/i.exec(disposition);
-                a.href = downloadUrl;
-                a.download = match ? match[1] : 'library_events.ics';
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                window.URL.revokeObjectURL(downloadUrl);
-                updateStatus(useFilters ? 'Downloaded filtered events as .ics' : 'Downloaded all events as .ics');
-            } catch (error) {
-                updateStatus('ICS download failed: ' + error.message);
-            }
-        }
-
-        async function chooseAndDownloadIcs() {
-            // Simple prompt: OK = filtered, Cancel = all
-            const hasFilters = filteredEvents.length && filteredEvents.length !== allEvents.length;
-            const message = hasFilters
-                ? `Download only the ${filteredEvents.length} filtered events? Click Cancel to download all ${allEvents.length}.`
-                : `No filters applied. Download all ${allEvents.length} events?`;
-            const useFiltered = confirm(message);
-            await downloadIcs(useFiltered && hasFilters);
-        }
-
-        async function downloadPdf(useFilters = true) {
-            updateStatus('Preparing PDF download...');
-            const state = getFilterState();
-            const query = useFilters ? buildQueryString(state) : '';
-            const url = `/api/pdf${query ? '?' + query : ''}`;
-
-            try {
-                const response = await fetch(url);
-                if (!response.ok) {
-                    throw new Error('Failed to generate PDF');
-                }
-                const blob = await response.blob();
-                const downloadUrl = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                const disposition = response.headers.get('Content-Disposition') || '';
-                const match = /filename=\"?([^\";]+)\"?/i.exec(disposition);
-                a.href = downloadUrl;
-                a.download = match ? match[1] : 'library_events.pdf';
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                window.URL.revokeObjectURL(downloadUrl);
-                updateStatus(useFilters ? 'Downloaded filtered events as PDF' : 'Downloaded all events as PDF');
-            } catch (error) {
-                updateStatus('PDF download failed: ' + error.message);
-            }
-        }
-
-        async function chooseAndDownloadPdf() {
-            const hasFilters = filteredEvents.length && filteredEvents.length !== allEvents.length;
-            const message = hasFilters
-                ? `Download only the ${filteredEvents.length} filtered events? Click Cancel to download all ${allEvents.length}.`
-                : `No filters applied. Download all ${allEvents.length} events?`;
-            const useFiltered = confirm(message);
-            await downloadPdf(useFiltered && hasFilters);
-        }
-
-        function displayEvents(events, state = lastFilterState) {
+        function displayEvents(events) {
             const grid = document.getElementById('events-grid');
-            const tokens = state?.searchTokens || [];
-            const fields = state?.searchFields || [];
-            
+
             if (events.length === 0) {
-                grid.innerHTML = '<div class="no-events">No events found matching your criteria.</div>';
+                grid.innerHTML = `
+                    <div class="col-span-full text-center py-12">
+                        <span class="material-symbols-outlined text-4xl text-slate-400 mb-4 block">search_off</span>
+                        <p class="text-slate-600 dark:text-slate-400">No events found matching your criteria.</p>
+                    </div>`;
                 return;
             }
-            
-            const highlight = (value, fieldKey) => highlightText(value, tokens, fields, fieldKey);
 
-            grid.innerHTML = events.map(event => `
-                <div class="event-card">
-                    <div class="event-header">
-                        <h3 class="event-title">${highlight(event.Title || 'Untitled Event', 'title')}</h3>
-                        <span class="event-library">${highlight(event.Library || 'Unknown', 'library')}</span>
-                    </div>
-                    
-                    <div class="event-meta">
-                        <span><span class="icon">📅</span> ${highlight(event.Date || 'Date TBD', 'date')}</span>
-                        <span><span class="icon">🕐</span> ${highlight(event.Time || 'Time TBD', 'time')}</span>
-                        <span><span class="icon">📍</span> ${highlight(event.Location || 'Location TBD', 'location')}</span>
-                        <span><span class="icon">👥</span> ${highlight(event['Age Group'] || 'All Ages', 'age')}</span>
-                    </div>
-                    
-                    ${event.Description && event.Description !== 'Not found' ? 
-                        `<div class="event-description">${highlight(event.Description, 'description')}</div>` : ''}
-                    
-                    ${event.Link && event.Link !== 'N/A' && event.Link !== '' ? 
-                        `<div class="event-link">
-                            <a href="${escapeHtml(event.Link)}" target="_blank" rel="noopener">More Info →</a>
-                        </div>` : ''}
-                </div>
-            `).join('');
+            grid.innerHTML = events.map(event => {
+                const ageGroup = event['Age Group'] || 'All Ages';
+                const ageColor = getAgeGroupColor(ageGroup);
+
+                return `
+                    <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 shadow-sm hover:shadow-md transition-shadow duration-200">
+                        <div class="flex justify-between items-start mb-4">
+                            <h3 class="text-lg font-semibold text-slate-900 dark:text-slate-100 leading-tight pr-4">
+                                ${escapeHtml(event.Title || 'Untitled Event')}
+                            </h3>
+                            <span class="px-3 py-1 bg-primary/10 text-primary text-xs font-medium rounded-full whitespace-nowrap">
+                                ${escapeHtml(event.Library || 'Unknown')}
+                            </span>
+                        </div>
+
+                        <div class="space-y-3 mb-4">
+                            <div class="flex items-center text-sm text-slate-600 dark:text-slate-400">
+                                <span class="material-symbols-outlined text-lg mr-3 text-slate-400">event</span>
+                                ${escapeHtml(event.Date || 'Date TBD')}
+                            </div>
+                            <div class="flex items-center text-sm text-slate-600 dark:text-slate-400">
+                                <span class="material-symbols-outlined text-lg mr-3 text-slate-400">schedule</span>
+                                ${escapeHtml(event.Time || 'Time TBD')}
+                            </div>
+                            <div class="flex items-center text-sm text-slate-600 dark:text-slate-400">
+                                <span class="material-symbols-outlined text-lg mr-3 text-slate-400">location_on</span>
+                                ${escapeHtml(event.Location || 'Location TBD')}
+                            </div>
+                            <div class="flex items-center text-sm text-slate-600 dark:text-slate-400">
+                                <span class="material-symbols-outlined text-lg mr-3 text-slate-400">group</span>
+                                <span class="px-2 py-1 ${ageColor} text-xs font-medium rounded">
+                                    ${escapeHtml(ageGroup)}
+                                </span>
+                            </div>
+                        </div>
+
+                        ${event.Description && event.Description !== 'Not found' ?
+                            `<p class="text-sm text-slate-600 dark:text-slate-400 mb-4 line-clamp-3">
+                                ${escapeHtml(event.Description)}
+                            </p>` : ''}
+
+                        ${event.Link && event.Link !== 'N/A' && event.Link !== '' ?
+                            `<div class="pt-3 border-t border-slate-200 dark:border-slate-700">
+                                <a href="${escapeHtml(event.Link)}"
+                                   target="_blank"
+                                   rel="noopener"
+                                   class="inline-flex items-center gap-2 text-primary hover:text-blue-700 font-medium text-sm transition-colors">
+                                    <span>More Information</span>
+                                    <span class="material-symbols-outlined text-sm">open_in_new</span>
+                                </a>
+                            </div>` : ''}
+                    </div>`;
+            }).join('');
+        }
+
+        function getAgeGroupColor(ageGroup) {
+            const colors = {
+                'Baby/Toddler': 'bg-pink-100 text-pink-700 dark:bg-pink-900 dark:text-pink-300',
+                'Preschool/Early Elementary': 'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300',
+                'Elementary': 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300',
+                'Middle School/Teen': 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300',
+                'Teen/Young Adult': 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300',
+                'Adult': 'bg-gray-100 text-gray-700 dark:bg-gray-900 dark:text-gray-300',
+                'Family/All Ages': 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300',
+                'Kids': 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300'
+            };
+            return colors[ageGroup] || 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300';
+        }
+
+        async function downloadICS() {
+            const params = getCurrentFilterParams();
+            window.location.href = `/api/ics?${params}`;
+        }
+
+        async function downloadPDF() {
+            const params = getCurrentFilterParams();
+            window.location.href = `/api/pdf?${params}`;
+        }
+
+        function getCurrentFilterParams() {
+            const library = document.getElementById('library-filter').value;
+            const typeSelected = Array.from(document.querySelectorAll('input[name="type"]:checked')).map(cb => cb.value);
+            const search = document.getElementById('search-input').value;
+            const preset = document.getElementById('date-preset').value;
+            const startInput = document.getElementById('start-date');
+            const endInput = document.getElementById('end-date');
+            const { startIso, endIso } = computeDateRange(preset, startInput.value, endInput.value);
+
+            const params = new URLSearchParams();
+            if (library !== 'All') params.append('library', library);
+            typeSelected.forEach(t => params.append('type', t));
+            if (search) params.append('search', search);
+            if (startIso) params.append('start', startIso);
+            if (endIso) params.append('end', endIso);
+
+            return params.toString();
         }
 
         async function refreshData() {
             updateStatus('Refreshing data... This may take a few minutes.');
-            const refreshBtn = event.target;
-            const originalText = refreshBtn.textContent;
+            const refreshBtn = document.getElementById('refresh-btn');
+            const originalText = refreshBtn.innerHTML;
+            refreshBtn.innerHTML = `
+                <div class="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full"></div>
+                Refreshing...
+            `;
             refreshBtn.disabled = true;
-            refreshBtn.textContent = 'Refreshing...';
 
             try {
                 const response = await fetch('/api/refresh');
@@ -785,11 +457,8 @@
 
                 if (result.success) {
                     updateStatus(result.message);
-                    if (result.total_events !== undefined) {
-                        updateTotalEventsCount(result.total_events);
-                    }
                     await loadEvents();
-                    await applyFilters();
+                    document.getElementById('last-updated').textContent = new Date().toLocaleString();
                 } else {
                     updateStatus('Error: ' + result.message);
                 }
@@ -797,42 +466,12 @@
                 updateStatus('Error refreshing data: ' + error.message);
             } finally {
                 refreshBtn.disabled = false;
-                refreshBtn.textContent = originalText;
+                refreshBtn.innerHTML = originalText;
             }
-        }
-
-        function parseSearchTokens(input) {
-            if (!input) return [];
-            return (input.match(/"([^"]+)"|\S+/g) || [])
-                .map(token => token.replace(/^"+|"+$/g, ''))
-                .filter(Boolean);
-        }
-
-        function escapeRegExp(str) {
-            return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        }
-
-        function highlightText(text, tokens, fields, fieldKey) {
-            const safe = escapeHtml(text || '');
-            if (!tokens || !tokens.length) return safe;
-            if (fields && fields.length && !fields.includes(fieldKey)) {
-                return safe;
-            }
-            return tokens.reduce((acc, token) => {
-                const regex = new RegExp(`(${escapeRegExp(token)})`, 'ig');
-                return acc.replace(regex, '<mark>$1</mark>');
-            }, safe);
         }
 
         function updateStatus(message) {
             document.getElementById('status').textContent = message;
-        }
-
-        function updateTotalEventsCount(count) {
-            const countElement = document.getElementById('total-events-count');
-            if (countElement) {
-                countElement.textContent = count;
-            }
         }
 
         function escapeHtml(text) {
