@@ -13,6 +13,7 @@ import hashlib
 from io import BytesIO
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
+from difflib import SequenceMatcher
 from ics import Calendar, Event
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
@@ -94,6 +95,9 @@ def filter_events(
     type_filters = type_filters or []
     filtered_events = events_data.copy()
     search_mode = (search_mode or 'any').lower()
+    allowed_modes = {'any', 'all', 'exact', 'fuzzy'}
+    if search_mode not in allowed_modes:
+        search_mode = 'any'
 
     # Apply library filter
     if library_filter and library_filter != 'All':
@@ -113,6 +117,8 @@ def filter_events(
     # Apply search filter with configurable fields and modes
     if search_term:
         raw = search_term.lower().strip()
+        fuzzy_threshold = 0.65
+
         # Support quoted phrases or space-separated tokens
         tokens = []
         for m in re.finditer(r'"([^"]+)"|(\S+)', raw):
@@ -138,14 +144,33 @@ def filter_events(
             selected_fields = ['Title', 'Description', 'Location']
 
         def matches(ev):
-            values = " ".join(str(ev.get(f, '') or '') for f in selected_fields).lower()
-            if raw and raw in values:
+            values_list = [str(ev.get(f, '') or '').lower() for f in selected_fields]
+            combined = " ".join(values_list)
+
+            if not raw:
+                return True
+
+            if search_mode == 'exact':
+                return raw in combined
+
+            if search_mode == 'fuzzy':
+                if not any(values_list):
+                    return False
+
+                def score(needle: str) -> float:
+                    return max(SequenceMatcher(None, needle, val).ratio() for val in values_list if val)
+
+                if score(raw) >= fuzzy_threshold:
+                    return True
+                return any(score(tok) >= fuzzy_threshold for tok in tokens)
+
+            if raw in combined:
                 return True
             if not tokens:
                 return True
             if search_mode == 'all':
-                return all(tok in values for tok in tokens)
-            return any(tok in values for tok in tokens)
+                return all(tok in combined for tok in tokens)
+            return any(tok in combined for tok in tokens)
 
         filtered_events = [e for e in filtered_events if matches(e)]
 
@@ -752,12 +777,51 @@ def create_html_template():
                 </div>
 
                 <!-- Search -->
-                <div>
-                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Search</label>
-                    <div class="relative">
-                        <span class="material-symbols-outlined absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 text-lg">search</span>
-                        <input type="text" id="search-input" placeholder="Search events..."
-                               class="w-full pl-10 pr-4 py-2 border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-primary focus:border-primary">
+                <div class="space-y-2">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Search</label>
+                        <div class="relative">
+                            <span class="material-symbols-outlined absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 text-lg">search</span>
+                            <input type="text" id="search-input" placeholder="Search events..."
+                                   class="w-full pl-10 pr-4 py-2 border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-primary focus:border-primary">
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Search Mode</label>
+                            <select id="search-mode"
+                                    class="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-primary focus:border-primary">
+                                <option value="any" selected>Any word</option>
+                                <option value="all">All words</option>
+                                <option value="exact">Exact phrase</option>
+                                <option value="fuzzy">Fuzzy match</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Fields</label>
+                            <div class="grid grid-cols-2 gap-2 text-sm">
+                                <label class="flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                                    <input type="checkbox" name="search-field" value="title" class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary" checked>
+                                    <span>Title</span>
+                                </label>
+                                <label class="flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                                    <input type="checkbox" name="search-field" value="description" class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary" checked>
+                                    <span>Description</span>
+                                </label>
+                                <label class="flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                                    <input type="checkbox" name="search-field" value="location" class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary" checked>
+                                    <span>Location</span>
+                                </label>
+                                <label class="flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                                    <input type="checkbox" name="search-field" value="library" class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary">
+                                    <span>Library</span>
+                                </label>
+                                <label class="flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                                    <input type="checkbox" name="search-field" value="age_group" class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary">
+                                    <span>Age Group</span>
+                                </label>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -898,6 +962,8 @@ def create_html_template():
             const library = document.getElementById('library-filter').value;
             const typeSelected = Array.from(document.querySelectorAll('input[name="type"]:checked')).map(cb => cb.value);
             const search = document.getElementById('search-input').value;
+            const searchMode = document.getElementById('search-mode').value;
+            const searchFields = Array.from(document.querySelectorAll('input[name="search-field"]:checked')).map(cb => cb.value);
             const preset = document.getElementById('date-preset').value;
             const startInput = document.getElementById('start-date');
             const endInput = document.getElementById('end-date');
@@ -907,8 +973,10 @@ def create_html_template():
 
             try {
                 const typeParams = typeSelected.map(t => `&type=${encodeURIComponent(t)}`).join('');
+                const fieldParams = searchFields.length ? `&search_fields=${encodeURIComponent(searchFields.join(','))}` : '';
+                const modeParam = searchMode ? `&search_mode=${encodeURIComponent(searchMode)}` : '';
                 const rangeParams = (startIso ? `&start=${encodeURIComponent(startIso)}` : '') + (endIso ? `&end=${encodeURIComponent(endIso)}` : '');
-                const url = `/api/events?library=${encodeURIComponent(library)}${typeParams}&search=${encodeURIComponent(search)}${rangeParams}`;
+                const url = `/api/events?library=${encodeURIComponent(library)}${typeParams}&search=${encodeURIComponent(search)}${fieldParams}${modeParam}${rangeParams}`;
                 const response = await fetch(url);
                 const data = await response.json();
                 filteredEvents = data.events;
@@ -1062,6 +1130,8 @@ def create_html_template():
             const library = document.getElementById('library-filter').value;
             const typeSelected = Array.from(document.querySelectorAll('input[name="type"]:checked')).map(cb => cb.value);
             const search = document.getElementById('search-input').value;
+            const searchMode = document.getElementById('search-mode').value;
+            const searchFields = Array.from(document.querySelectorAll('input[name="search-field"]:checked')).map(cb => cb.value);
             const preset = document.getElementById('date-preset').value;
             const startInput = document.getElementById('start-date');
             const endInput = document.getElementById('end-date');
@@ -1071,6 +1141,8 @@ def create_html_template():
             if (library !== 'All') params.append('library', library);
             typeSelected.forEach(t => params.append('type', t));
             if (search) params.append('search', search);
+            if (searchMode) params.append('search_mode', searchMode);
+            if (searchFields.length) params.append('search_fields', searchFields.join(','));
             if (startIso) params.append('start', startIso);
             if (endIso) params.append('end', endIso);
 
