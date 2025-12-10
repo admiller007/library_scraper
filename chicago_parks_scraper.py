@@ -157,6 +157,12 @@ def fetch_chicago_parks_events() -> List[Dict[str, Any]]:
                 logger.debug(f"Skipping item {idx} - title too short: '{title}'")
                 continue
 
+            # Skip non-events (alerts, closures, etc.)
+            skip_keywords = ['alert', 'closure', 'closed', 'trail is closed', 'facility closed']
+            if any(keyword in title.lower() for keyword in skip_keywords):
+                logger.debug(f"Skipping non-event: '{title}'")
+                continue
+
             # Extract link
             link_elem = item.find('a', href=True)
             link = link_elem.get('href', "N/A") if link_elem else "N/A"
@@ -179,13 +185,29 @@ def fetch_chicago_parks_events() -> List[Dict[str, Any]]:
                     date_str = clean_text(time_elem.get_text())
 
             # If no time element, look for date classes
-            if date_str == "Not found":
-                date_elem = item.find(class_=re.compile(r'date|when', re.IGNORECASE))
+            if date_str == "Not found" or not date_str:
+                date_elem = item.find(class_=re.compile(r'date|when|day', re.IGNORECASE))
                 if date_elem:
                     date_str = clean_text(date_elem.get_text())
 
-            # Parse and standardize the date
-            date_str = parse_date(date_str)
+            # Also check for spans with date-related text
+            if date_str == "Not found" or not date_str:
+                for span in item.find_all('span'):
+                    text = clean_text(span.get_text())
+                    # Look for month patterns
+                    if re.search(r'\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\b', text, re.IGNORECASE):
+                        date_str = text
+                        break
+
+            # Try to expand abbreviated dates like "Dec 10" to full date with year
+            if date_str and date_str != "Not found":
+                # If we have something like "Dec 10" without a year, add current year
+                if re.match(r'^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}$', date_str, re.IGNORECASE):
+                    current_year = datetime.now().year
+                    date_str = f"{date_str}, {current_year}"
+
+                # Parse and standardize the date
+                date_str = parse_date(date_str)
 
             # Extract time
             time_str = "Not found"
@@ -200,6 +222,13 @@ def fetch_chicago_parks_events() -> List[Dict[str, Any]]:
                     time_str = time_match.group(1)
                 elif re.search(r'\d{1,2}:\d{2}\s*[ap]m', time_text, re.IGNORECASE):
                     time_str = time_text
+
+            # If not found, search all text in the item for time patterns
+            if time_str == "Not found":
+                item_text = clean_text(item.get_text())
+                time_match = re.search(r'(\d{1,2}:\d{2}\s*[ap]m\s*[-–]\s*\d{1,2}:\d{2}\s*[ap]m|\d{1,2}\s*[ap]m\s*[-–]\s*\d{1,2}\s*[ap]m)', item_text, re.IGNORECASE)
+                if time_match:
+                    time_str = time_match.group(1)
 
             # If not found in dedicated time element, try to extract from date string
             if time_str == "Not found" and date_str != "Not found":
@@ -222,14 +251,37 @@ def fetch_chicago_parks_events() -> List[Dict[str, Any]]:
             description = "Not found"
             # Look for description, summary, or body classes
             desc_elem = (
-                item.find(class_=re.compile(r'description|summary|body|excerpt|teaser', re.IGNORECASE)) or
+                item.find(class_=re.compile(r'description|summary|body|excerpt|teaser|details', re.IGNORECASE)) or
                 item.find('p')
             )
             if desc_elem:
                 description = clean_text(desc_elem.get_text())
-                # Truncate very long descriptions
-                if len(description) > 500:
-                    description = description[:497] + "..."
+
+            # If no description found, try to extract from item text
+            if description == "Not found" or not description:
+                # Get all paragraphs
+                paragraphs = item.find_all('p')
+                if paragraphs:
+                    # Combine paragraph text
+                    desc_parts = [clean_text(p.get_text()) for p in paragraphs if clean_text(p.get_text())]
+                    if desc_parts:
+                        description = ' '.join(desc_parts)
+
+            # If still not found, try to get a snippet from item text (excluding title and location)
+            if description == "Not found" or not description:
+                item_text = clean_text(item.get_text())
+                # Remove title and location from text
+                snippet = item_text.replace(title, '').replace(location_str, '')
+                # Remove date and time patterns
+                snippet = re.sub(r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}', '', snippet, flags=re.IGNORECASE)
+                snippet = re.sub(r'\d{1,2}:\d{2}\s*[ap]m', '', snippet, flags=re.IGNORECASE)
+                snippet = clean_text(snippet)
+                if snippet and len(snippet) > 20:
+                    description = snippet
+
+            # Truncate very long descriptions
+            if description and len(description) > 500:
+                description = description[:497] + "..."
 
             # Determine age group based on content
             age_group = "All Ages"
