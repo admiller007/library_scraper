@@ -67,6 +67,7 @@ GLENCOE_AJAX_URL = "https://calendar.glencoelibrary.org/ajax/calendar/list"
 GLENCOE_CALENDAR_ID = "19721"
 SKOKIE_PARKS_URL = "https://www.skokieparks.org/events/"
 SKOKIE_PARKS_BASE = "https://www.skokieparks.org"
+WILMETTE_PARK_URL = "https://wilmettepark.org/upcoming-events/list/"
 FPDCC_EVENTS_API = "https://fpdcc.com/wp-json/tribe/events/v1/events"
 
 # Pre-compiled regex patterns for performance
@@ -1133,6 +1134,144 @@ async def fetch_skokie_events() -> List[Dict[str, Any]]:
     logger.info(f"Found {len(all_events)} events for Skokie")
     return all_events
 
+async def _fetch_wilmette_park_content(app: AsyncFirecrawl) -> str:
+    """Fetch content from Wilmette Park District with error handling."""
+    response = await firecrawl_scrape(app, url=WILMETTE_PARK_URL, only_main_content=True)
+    return response.markdown if hasattr(response, "markdown") else ""
+
+async def fetch_wilmette_park_events() -> List[Dict[str, Any]]:
+    """Fetch Wilmette Park District events using Firecrawl."""
+    logger.info("Fetching Wilmette Park District events...")
+    if not FIRECRAWL_API_KEY:
+        logger.warning("FIRECRAWL_API_KEY not set; skipping Wilmette Park District fetch")
+        return []
+    app = AsyncFirecrawl(api_key=FIRECRAWL_API_KEY)
+
+    try:
+        markdown = await retry_with_backoff(_fetch_wilmette_park_content, app)
+        if not markdown:
+            logger.warning("No markdown content received from Wilmette Park District")
+            return []
+    except ValueError as e:
+        logger.error(f"Invalid response from Wilmette Park District API: {e}")
+        return []
+    except ConnectionError as e:
+        logger.error(f"Connection error while fetching Wilmette Park District events: {e}")
+        return []
+    except Exception as e:
+        logger.error(f"Unexpected error fetching Wilmette Park District events: {e}", exc_info=True)
+        return []
+
+    if not markdown:
+        return []
+
+    # Parse events from markdown
+    all_events = []
+
+    try:
+        # Split by event entries - looking for typical event markers
+        # Most event listing pages have patterns like title links followed by dates
+        event_blocks = re.split(r'(?=\[([^\]]+)\]\([^)]+\)\s*(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday))', markdown)
+
+        for block in event_blocks:
+            if not block.strip() or len(block) < 50:
+                continue
+
+            # Extract event title and link
+            title_match = re.search(r'^\[([^\]]+)\]\(([^)]+)\)', block.strip())
+            if not title_match:
+                continue
+
+            event_title = title_match.group(1).strip()
+            event_link = title_match.group(2).strip()
+
+            # Make sure the link is absolute
+            if event_link and not event_link.startswith('http'):
+                event_link = f"https://wilmettepark.org{event_link if event_link.startswith('/') else '/' + event_link}"
+
+            # Skip non-events (like navigation items)
+            if re.search(r'home|about|contact|policy', event_title, re.IGNORECASE):
+                continue
+
+            # Extract date
+            date_match = re.search(r'((?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4})', block)
+            if not date_match:
+                # Try alternative date format
+                date_match = re.search(r'((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4})', block)
+
+            if not date_match:
+                continue
+
+            event_date = date_match.group(1)
+
+            # Extract time (support various formats)
+            time_str = "Not found"
+            time_match = re.search(r'(\d{1,2}:\d{2}\s*[ap]m\s*[\-–]\s*\d{1,2}:\d{2}\s*[ap]m|\d{1,2}:\d{2}\s*[ap]m|All\s+Day)', block, re.IGNORECASE)
+            if time_match:
+                time_str = time_match.group(1).replace(' - ', '–')
+
+            # Extract location
+            location = "Wilmette Park District"  # Default
+
+            # Look for location/venue information
+            location_patterns = [
+                r'Location:\s*([^\n,]+)',
+                r'Venue:\s*([^\n,]+)',
+                r'at\s+([\w\s]+\s+(?:Park|Center|Field|Pool|Playground|Recreation\s+Center))',
+                r'Park:\s*([^\n,]+)',
+            ]
+
+            for pattern in location_patterns:
+                loc_match = re.search(pattern, block, re.IGNORECASE)
+                if loc_match:
+                    potential_location = clean_text(loc_match.group(1))
+                    if potential_location and len(potential_location.strip()) > 2:
+                        location = potential_location.strip()
+                        # Add "Wilmette Park District" if not already mentioned
+                        if "wilmette" not in location.lower() and "park" in location.lower():
+                            location = f"{location} - Wilmette Park District"
+                        break
+
+            # Extract age group from content
+            age_group = extract_age_group(f"{event_title} {block}")
+
+            # Extract description
+            description = "Not found"
+
+            # Look for description after the title and before common footer elements
+            desc_match = re.search(r'\]\([^)]+\)\s*(?:' + re.escape(event_date) + r').*?\n\n(.*?)(?=\n\n(?:Register|More Info|View Details|Share|Add to Calendar)|\Z)', block, re.DOTALL | re.IGNORECASE)
+            if desc_match:
+                desc_text = desc_match.group(1).strip()
+                # Clean up the description
+                desc_lines = []
+                for line in desc_text.split('\n'):
+                    line = line.strip()
+                    if (line and len(line) > 15 and
+                        not re.search(r'^(Time|Date|Location|Age|Category|Register|Share):', line, re.IGNORECASE)):
+                        desc_lines.append(line)
+
+                if desc_lines:
+                    description = clean_text(" ".join(desc_lines[:3]))  # Limit to first 3 lines
+
+            all_events.append({
+                "Library": "Wilmette Park District",
+                "Title": event_title,
+                "Date": event_date,
+                "Time": time_str,
+                "Location": location,
+                "Age Group": age_group,
+                "Program Type": "Recreation/Parks",
+                "Description": description,
+                "Link": event_link
+            })
+
+    except Exception as e:
+        logger.error(f"Error parsing Wilmette Park District markdown: {e}")
+        return []
+
+    logger.info(f"Found {len(all_events)} events for Wilmette Park District")
+    return all_events
+
 async def _fetch_fpdcc_page(session, page: int, start_date: str, end_date: str) -> Dict[str, Any]:
     """Fetch a single page of Forest Preserves events."""
     params = {
@@ -1487,6 +1626,7 @@ async def main():
         fetch_bibliocommons_events("CPL Edgebrook", CPL_BASE_URL, "locations=27"),
         fetch_bibliocommons_events("CPL Budlong Woods", CPL_BASE_URL, "locations=16"),
         fetch_libnet_events("Wilmette", "wilmette.libnet.info"),
+        fetch_wilmette_park_events(),
         fetch_skokie_events(),
         fetch_skokie_parks_events(),
         fetch_fpdcc_events(),
