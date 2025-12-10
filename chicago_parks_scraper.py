@@ -12,6 +12,8 @@ from typing import List, Dict, Any
 from datetime import datetime
 import re
 import time
+import json
+import pandas as pd
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -332,10 +334,51 @@ def fetch_chicago_parks_events() -> List[Dict[str, Any]]:
 
 if __name__ == "__main__":
     events = fetch_chicago_parks_events()
-    for event in events[:5]:  # Print first 5 events
-        print(f"\n{event['Title']}")
-        print(f"  Date: {event['Date']}")
-        print(f"  Time: {event['Time']}")
-        print(f"  Location: {event['Location']}")
-        print(f"  Description: {event['Description'][:100]}...")
-        print(f"  Link: {event['Link']}")
+
+    print(f"\n{'='*60}")
+    print(f"Scraped {len(events)} total events from Chicago Park District")
+    print(f"{'='*60}\n")
+
+    if events:
+        # Save to JSON
+        json_filename = 'chicago_parks_events.json'
+        with open(json_filename, 'w', encoding='utf-8') as f:
+            json.dump(events, f, indent=2, ensure_ascii=False)
+        print(f"✓ Saved events to {json_filename}")
+
+        # Save to CSV
+        csv_filename = 'chicago_parks_events.csv'
+        df = pd.DataFrame(events)
+        df.to_csv(csv_filename, index=False, encoding='utf-8')
+        print(f"✓ Saved events to {csv_filename}")
+
+        # Print summary statistics
+        print(f"\n{'='*60}")
+        print("SUMMARY STATISTICS")
+        print(f"{'='*60}")
+        print(f"Total events: {len(events)}")
+        print(f"\nEvents by Age Group:")
+        print(df['Age Group'].value_counts().to_string())
+        print(f"\nEvents by Program Type:")
+        print(df['Program Type'].value_counts().to_string())
+        print(f"\nEvents with valid dates: {df[df['Date'] != 'Not found'].shape[0]}")
+        print(f"Events with valid times: {df[df['Time'] != 'Not found'].shape[0]}")
+
+        # Print first 5 events as preview
+        print(f"\n{'='*60}")
+        print("PREVIEW - First 5 Events:")
+        print(f"{'='*60}")
+        for event in events[:5]:
+            print(f"\n{event['Title']}")
+            print(f"  Date: {event['Date']}")
+            print(f"  Time: {event['Time']}")
+            print(f"  Location: {event['Location']}")
+            print(f"  Age Group: {event['Age Group']}")
+            print(f"  Program Type: {event['Program Type']}")
+            if event['Description'] and len(event['Description']) > 100:
+                print(f"  Description: {event['Description'][:100]}...")
+            else:
+                print(f"  Description: {event['Description']}")
+            print(f"  Link: {event['Link']}")
+    else:
+        print("⚠ No events were scraped. Check the logs above for errors.")
