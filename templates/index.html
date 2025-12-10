@@ -116,12 +116,51 @@
                 </div>
 
                 <!-- Search -->
-                <div>
-                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Search</label>
-                    <div class="relative">
-                        <span class="material-symbols-outlined absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 text-lg">search</span>
-                        <input type="text" id="search-input" placeholder="Search events..."
-                               class="w-full pl-10 pr-4 py-2 border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-primary focus:border-primary">
+                <div class="space-y-2">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Search</label>
+                        <div class="relative">
+                            <span class="material-symbols-outlined absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 text-lg">search</span>
+                            <input type="text" id="search-input" placeholder="Search events..."
+                                   class="w-full pl-10 pr-4 py-2 border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-primary focus:border-primary">
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Search Mode</label>
+                            <select id="search-mode"
+                                    class="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-primary focus:border-primary">
+                                <option value="any" selected>Any word</option>
+                                <option value="all">All words</option>
+                                <option value="exact">Exact phrase</option>
+                                <option value="fuzzy">Fuzzy match</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Fields</label>
+                            <div class="grid grid-cols-2 gap-2 text-sm">
+                                <label class="flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                                    <input type="checkbox" name="search-field" value="title" class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary" checked>
+                                    <span>Title</span>
+                                </label>
+                                <label class="flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                                    <input type="checkbox" name="search-field" value="description" class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary" checked>
+                                    <span>Description</span>
+                                </label>
+                                <label class="flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                                    <input type="checkbox" name="search-field" value="location" class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary" checked>
+                                    <span>Location</span>
+                                </label>
+                                <label class="flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                                    <input type="checkbox" name="search-field" value="library" class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary">
+                                    <span>Library</span>
+                                </label>
+                                <label class="flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                                    <input type="checkbox" name="search-field" value="age_group" class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary">
+                                    <span>Age Group</span>
+                                </label>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -289,6 +328,8 @@
             const library = document.getElementById('library-filter').value;
             const typeSelected = Array.from(document.querySelectorAll('input[name="type"]:checked')).map(cb => cb.value);
             const search = document.getElementById('search-input').value;
+            const searchMode = document.getElementById('search-mode').value;
+            const searchFields = Array.from(document.querySelectorAll('input[name="search-field"]:checked')).map(cb => cb.value);
             const preset = document.getElementById('date-preset').value;
             const startInput = document.getElementById('start-date');
             const endInput = document.getElementById('end-date');
@@ -298,8 +339,10 @@
 
             try {
                 const typeParams = typeSelected.map(t => `&type=${encodeURIComponent(t)}`).join('');
+                const fieldParams = searchFields.length ? `&search_fields=${encodeURIComponent(searchFields.join(','))}` : '';
+                const modeParam = searchMode ? `&search_mode=${encodeURIComponent(searchMode)}` : '';
                 const rangeParams = (startIso ? `&start=${encodeURIComponent(startIso)}` : '') + (endIso ? `&end=${encodeURIComponent(endIso)}` : '');
-                const url = `/api/events?library=${encodeURIComponent(library)}${typeParams}&search=${encodeURIComponent(search)}${rangeParams}`;
+                const url = `/api/events?library=${encodeURIComponent(library)}${typeParams}&search=${encodeURIComponent(search)}${fieldParams}${modeParam}${rangeParams}`;
                 const response = await fetch(url);
                 const data = await response.json();
                 filteredEvents = data.events;
@@ -453,6 +496,8 @@
             const library = document.getElementById('library-filter').value;
             const typeSelected = Array.from(document.querySelectorAll('input[name="type"]:checked')).map(cb => cb.value);
             const search = document.getElementById('search-input').value;
+            const searchMode = document.getElementById('search-mode').value;
+            const searchFields = Array.from(document.querySelectorAll('input[name="search-field"]:checked')).map(cb => cb.value);
             const preset = document.getElementById('date-preset').value;
             const startInput = document.getElementById('start-date');
             const endInput = document.getElementById('end-date');
@@ -462,6 +507,8 @@
             if (library !== 'All') params.append('library', library);
             typeSelected.forEach(t => params.append('type', t));
             if (search) params.append('search', search);
+            if (searchMode) params.append('search_mode', searchMode);
+            if (searchFields.length) params.append('search_fields', searchFields.join(','));
             if (startIso) params.append('start', startIso);
             if (endIso) params.append('end', endIso);
 
