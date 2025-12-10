@@ -11,6 +11,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 from pathlib import Path
+from bs4 import BeautifulSoup
 try:
     from firecrawl import AsyncFirecrawl as _AsyncFirecrawlClient  # v2 SDK
     _FIRECRAWL_V2 = True
@@ -88,11 +89,17 @@ COMPILED_PATTERNS = {
     }
 }
 
+# Chicago Park District specific configuration
+CPD_BASE_URL = "https://www.chicagoparkdistrict.com"
+CPD_EVENTS_LIST_URL = "https://www.chicagoparkdistrict.com/events"
+
 # Optimized throttling and connection management
 FIRECRAWL_CONCURRENCY = int(os.getenv('FIRECRAWL_CONCURRENCY', '3'))
 REQUESTS_CONCURRENCY = int(os.getenv('REQUESTS_CONCURRENCY', '5'))
+CPD_CONCURRENCY = int(os.getenv('CPD_CONCURRENCY', '2'))  # Lower for Chicago Parks to be respectful
 FIRECRAWL_SEM = asyncio.Semaphore(FIRECRAWL_CONCURRENCY)
 REQUESTS_SEM = asyncio.Semaphore(REQUESTS_CONCURRENCY)
+CPD_SEM = asyncio.Semaphore(CPD_CONCURRENCY)
 
 # Global session for connection pooling
 _http_session = None
@@ -1134,6 +1141,100 @@ async def fetch_skokie_events() -> List[Dict[str, Any]]:
     logger.info(f"Found {len(all_events)} events for Skokie")
     return all_events
 
+async def _fetch_cpd_listing_page(session, page: int) -> str:
+    """Fetch one page of the CPD events listing using direct HTTP requests."""
+    url = f"{CPD_EVENTS_LIST_URL}?page={page}"
+    async with CPD_SEM:
+        async with session.get(url) as resp:
+            resp.raise_for_status()
+            return await resp.text()
+
+async def _fetch_cpd_event_detail(session, url: str) -> Dict[str, Any]:
+    """Fetch and parse a single CPD event page using verified logic."""
+    if not url.startswith("http"):
+        url = f"{CPD_BASE_URL}{url}"
+
+    try:
+        async with CPD_SEM:
+            async with session.get(url, timeout=10) as resp:
+                resp.raise_for_status()
+                html = await resp.text()
+                # Small delay to be respectful
+                await asyncio.sleep(0.5)
+
+        # Parse HTML using BeautifulSoup
+        soup = BeautifulSoup(html, 'lxml')
+        details = {"Description": "Not found", "Time": "Not found", "Date": "Not found", "Location": "Chicago Park District"}
+
+        # 1. Extract Title
+        title_elem = soup.find('h1', class_='page-header') or soup.find('h1')
+        title = clean_text(title_elem.get_text()) if title_elem else "Untitled Event"
+
+        # 2. Extract Date & Time (Sibling Strategy)
+        date_label = soup.find(string=re.compile(r'Date and Time', re.IGNORECASE))
+        if date_label:
+            label_parent = date_label.parent
+            content_container = label_parent.find_next_sibling()
+
+            full_text = ""
+            if content_container:
+                full_text = content_container.get_text(separator=" ", strip=True)
+            else:
+                full_text = label_parent.parent.get_text(separator=" ", strip=True)
+
+            # Date
+            date_match = re.search(r'([A-Z][a-z]{2,8}\s+\d{1,2},?\s+\d{4})', full_text)
+            if date_match:
+                details["Date"] = date_match.group(1)
+
+            # Time
+            time_match = re.search(r'(\d{1,2}:\d{2}\s*[AP]M\s*[-–]\s*\d{1,2}:\d{2}\s*[AP]M)', full_text)
+            if not time_match:
+                time_match = re.search(r'(\d{1,2}:\d{2}\s*[AP]M)', full_text)
+            if time_match:
+                details["Time"] = time_match.group(0)
+
+        # 3. Extract Location
+        loc_label = soup.find(string=re.compile(r'Location', re.IGNORECASE))
+        if loc_label:
+            loc_parent = loc_label.parent
+            loc_container = loc_parent.find_next_sibling()
+            if loc_container:
+                raw_loc = loc_container.get_text(separator=" ", strip=True)
+                details["Location"] = clean_text(raw_loc)
+
+        # 4. Extract Description
+        desc_label = soup.find(string=re.compile(r'^Description$|^About this Event', re.IGNORECASE))
+        if desc_label:
+            parent = desc_label.find_parent()
+            next_elem = parent.find_next_sibling()
+            if next_elem:
+                details["Description"] = clean_text(next_elem.get_text())
+            else:
+                details["Description"] = clean_text(parent.get_text().replace(desc_label, ''))
+
+        # Fallback Description
+        if details["Description"] == "Not found":
+            body = soup.find(class_=re.compile(r'field--name-body', re.IGNORECASE))
+            if body:
+                details["Description"] = clean_text(body.get_text())
+
+        return {
+            "Library": "Chicago Park District",
+            "Title": title,
+            "Date": details["Date"],
+            "Time": details["Time"],
+            "Location": details["Location"],
+            "Age Group": extract_age_group(f"{title} {details['Description']}"),
+            "Program Type": "Recreation",
+            "Description": details["Description"],
+            "Link": url
+        }
+
+    except Exception as e:
+        logger.debug(f"Error parsing CPD detail {url}: {e}")
+        return None
+
 async def _fetch_chicago_parks_content(app: AsyncFirecrawl, page: int = 1) -> str:
     """Fetch content from Chicago Park District with pagination support."""
     url = f"{CHICAGO_PARKS_URL}?page={page}"
@@ -1265,65 +1366,70 @@ def parse_chicago_parks_markdown(markdown: str) -> List[Dict[str, Any]]:
     return events
 
 async def fetch_chicago_parks_events() -> List[Dict[str, Any]]:
-    """Fetch Chicago Park District events using Firecrawl."""
+    """Crawls Chicago Park District events with detailed page fetching."""
     logger.info("Fetching Chicago Park District events...")
-    if not FIRECRAWL_API_KEY:
-        logger.warning("FIRECRAWL_API_KEY not set; skipping Chicago Parks fetch")
+    session = await get_http_session()
+
+    # 1. Crawl Listing Pages to find event URLs
+    # Dynamically fetch all pages until no more events found
+    event_urls = set()
+    page = 0
+    max_pages = 30  # Safety limit to prevent infinite loops
+
+    try:
+        while page < max_pages:
+            try:
+                html = await retry_with_backoff(_fetch_cpd_listing_page, session, page)
+                soup = BeautifulSoup(html, 'lxml')
+
+                # Find links that look like event pages
+                # CPD usually uses /events/event-slug
+                links = soup.find_all('a', href=re.compile(r'^/events/[^/]+$'))
+                page_event_count = 0
+
+                for link in links:
+                    href = link.get('href')
+                    # Filter out non-events and short/empty links
+                    if (href and
+                        len(href) > 8 and
+                        href != '/events/map' and
+                        href not in event_urls):
+                        event_urls.add(href)
+                        page_event_count += 1
+
+                logger.info(f"Page {page}: Found {page_event_count} new event links (total: {len(event_urls)})")
+
+                # Stop if no new events found on this page
+                if page_event_count == 0:
+                    logger.info(f"No new events found on page {page}, stopping crawl")
+                    break
+
+                page += 1
+
+                # Add delay between listing pages to be respectful
+                if page < max_pages:
+                    await asyncio.sleep(2)
+
+            except Exception as e:
+                logger.warning(f"Failed to fetch CPD listing page {page}: {e}")
+                break
+    except Exception as e:
+        logger.error(f"CPD crawler failed: {e}")
         return []
 
-    app = AsyncFirecrawl(api_key=FIRECRAWL_API_KEY)
-    all_events = []
+    logger.info(f"Found {len(event_urls)} unique CPD event links. Fetching details...")
 
-    # Try fetching all available pages (212 total events across ~27 pages)
-    max_pages = 30  # Set higher to capture all available events
+    # 2. Fetch Details Concurrently
+    tasks = [_fetch_cpd_event_detail(session, url) for url in event_urls]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    for page in range(1, max_pages + 1):
-        try:
-            markdown = await retry_with_backoff(_fetch_chicago_parks_content, app, page)
-            if not markdown:
-                logger.debug(f"No content found for Chicago Parks page {page}")
-                break
+    valid_events = []
+    for res in results:
+        if isinstance(res, dict) and res.get("Date") != "Not found":
+            valid_events.append(res)
 
-            # Debug: Save the markdown content to see what we're getting
-            try:
-                with open(f'/tmp/chicago_parks_debug_page_{page}.txt', 'w') as f:
-                    f.write("=== CHICAGO PARKS RAW MARKDOWN ===\n")
-                    f.write(f"Page {page} content length: {len(markdown)}\n")
-                    f.write(f"Full content:\n{markdown}\n")
-                    f.write("=== END MARKDOWN ===\n")
-                logger.info(f"Chicago Parks debug content written to /tmp/chicago_parks_debug_page_{page}.txt")
-            except Exception as e:
-                logger.debug(f"Failed to write debug file: {e}")
-
-            events_on_page = parse_chicago_parks_markdown(markdown)
-            if not events_on_page:
-                logger.debug(f"No events found on Chicago Parks page {page}")
-                break
-
-            all_events.extend(events_on_page)
-            logger.info(f"Page {page}: Found {len(events_on_page)} events (total so far: {len(all_events)})")
-
-            # Stop if we've found all available events (212 total mentioned on page 1)
-            if len(all_events) >= 212:
-                logger.info(f"Reached expected total of 212 events, stopping at page {page}")
-                break
-
-            # Longer delay between pages to avoid rate limiting
-            await asyncio.sleep(3)
-
-        except Exception as e:
-            # Check if it's a rate limiting error and handle it specially
-            if "429" in str(e) or "rate limit" in str(e).lower():
-                logger.warning(f"Rate limited on Chicago Parks page {page}. Waiting 60 seconds...")
-                await asyncio.sleep(60)
-                # Don't break - try to continue with next page after wait
-                continue
-            else:
-                logger.error(f"Error fetching Chicago Parks page {page}: {e}")
-                break
-
-    logger.info(f"Found {len(all_events)} events for Chicago Park District")
-    return all_events
+    logger.info(f"Successfully extracted {len(valid_events)} CPD events")
+    return valid_events
 
 async def _fetch_fpdcc_page(session, page: int, start_date: str, end_date: str) -> Dict[str, Any]:
     """Fetch a single page of Forest Preserves events."""
