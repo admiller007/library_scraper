@@ -11,6 +11,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 from pathlib import Path
+from bs4 import BeautifulSoup
 try:
     from firecrawl import AsyncFirecrawl as _AsyncFirecrawlClient  # v2 SDK
     _FIRECRAWL_V2 = True
@@ -67,8 +68,8 @@ GLENCOE_AJAX_URL = "https://calendar.glencoelibrary.org/ajax/calendar/list"
 GLENCOE_CALENDAR_ID = "19721"
 SKOKIE_PARKS_URL = "https://www.skokieparks.org/events/"
 SKOKIE_PARKS_BASE = "https://www.skokieparks.org"
-WILMETTE_PARK_URL = "https://wilmettepark.org/upcoming-events/list/"
 FPDCC_EVENTS_API = "https://fpdcc.com/wp-json/tribe/events/v1/events"
+CHICAGO_PARKS_URL = "https://www.chicagoparkdistrict.com/events"
 
 # Pre-compiled regex patterns for performance
 COMPILED_PATTERNS = {
@@ -88,11 +89,17 @@ COMPILED_PATTERNS = {
     }
 }
 
+# Chicago Park District specific configuration
+CPD_BASE_URL = "https://www.chicagoparkdistrict.com"
+CPD_EVENTS_LIST_URL = "https://www.chicagoparkdistrict.com/events"
+
 # Optimized throttling and connection management
 FIRECRAWL_CONCURRENCY = int(os.getenv('FIRECRAWL_CONCURRENCY', '3'))
 REQUESTS_CONCURRENCY = int(os.getenv('REQUESTS_CONCURRENCY', '5'))
+CPD_CONCURRENCY = int(os.getenv('CPD_CONCURRENCY', '2'))  # Lower for Chicago Parks to be respectful
 FIRECRAWL_SEM = asyncio.Semaphore(FIRECRAWL_CONCURRENCY)
 REQUESTS_SEM = asyncio.Semaphore(REQUESTS_CONCURRENCY)
+CPD_SEM = asyncio.Semaphore(CPD_CONCURRENCY)
 
 # Global session for connection pooling
 _http_session = None
@@ -1134,143 +1141,295 @@ async def fetch_skokie_events() -> List[Dict[str, Any]]:
     logger.info(f"Found {len(all_events)} events for Skokie")
     return all_events
 
-async def _fetch_wilmette_park_content(app: AsyncFirecrawl) -> str:
-    """Fetch content from Wilmette Park District with error handling."""
-    response = await firecrawl_scrape(app, url=WILMETTE_PARK_URL, only_main_content=True)
+async def _fetch_cpd_listing_page(session, page: int) -> str:
+    """Fetch one page of the CPD events listing using direct HTTP requests."""
+    url = f"{CPD_EVENTS_LIST_URL}?page={page}"
+    async with CPD_SEM:
+        async with session.get(url) as resp:
+            resp.raise_for_status()
+            return await resp.text()
+
+async def _fetch_cpd_event_detail(session, url: str) -> Dict[str, Any]:
+    """Fetch and parse a single CPD event page using verified logic."""
+    if not url.startswith("http"):
+        url = f"{CPD_BASE_URL}{url}"
+
+    try:
+        async with CPD_SEM:
+            async with session.get(url, timeout=10) as resp:
+                resp.raise_for_status()
+                html = await resp.text()
+                # Small delay to be respectful
+                await asyncio.sleep(0.5)
+
+        # Parse HTML using BeautifulSoup
+        soup = BeautifulSoup(html, 'lxml')
+        details = {"Description": "Not found", "Time": "Not found", "Date": "Not found", "Location": "Chicago Park District"}
+
+        # 1. Extract Title
+        title_elem = soup.find('h1', class_='page-header') or soup.find('h1')
+        title = clean_text(title_elem.get_text()) if title_elem else "Untitled Event"
+
+        # 2. Extract Date & Time (Sibling Strategy)
+        date_label = soup.find(string=re.compile(r'Date and Time', re.IGNORECASE))
+        if date_label:
+            label_parent = date_label.parent
+            content_container = label_parent.find_next_sibling()
+
+            full_text = ""
+            if content_container:
+                full_text = content_container.get_text(separator=" ", strip=True)
+            else:
+                full_text = label_parent.parent.get_text(separator=" ", strip=True)
+
+            # Date
+            date_match = re.search(r'([A-Z][a-z]{2,8}\s+\d{1,2},?\s+\d{4})', full_text)
+            if date_match:
+                details["Date"] = date_match.group(1)
+
+            # Time
+            time_match = re.search(r'(\d{1,2}:\d{2}\s*[AP]M\s*[-–]\s*\d{1,2}:\d{2}\s*[AP]M)', full_text)
+            if not time_match:
+                time_match = re.search(r'(\d{1,2}:\d{2}\s*[AP]M)', full_text)
+            if time_match:
+                details["Time"] = time_match.group(0)
+
+        # 3. Extract Location
+        loc_label = soup.find(string=re.compile(r'Location', re.IGNORECASE))
+        if loc_label:
+            loc_parent = loc_label.parent
+            loc_container = loc_parent.find_next_sibling()
+            if loc_container:
+                raw_loc = loc_container.get_text(separator=" ", strip=True)
+                details["Location"] = clean_text(raw_loc)
+
+        # 4. Extract Description
+        desc_label = soup.find(string=re.compile(r'^Description$|^About this Event', re.IGNORECASE))
+        if desc_label:
+            parent = desc_label.find_parent()
+            next_elem = parent.find_next_sibling()
+            if next_elem:
+                details["Description"] = clean_text(next_elem.get_text())
+            else:
+                details["Description"] = clean_text(parent.get_text().replace(desc_label, ''))
+
+        # Fallback Description
+        if details["Description"] == "Not found":
+            body = soup.find(class_=re.compile(r'field--name-body', re.IGNORECASE))
+            if body:
+                details["Description"] = clean_text(body.get_text())
+
+        return {
+            "Library": "Chicago Park District",
+            "Title": title,
+            "Date": details["Date"],
+            "Time": details["Time"],
+            "Location": details["Location"],
+            "Age Group": extract_age_group(f"{title} {details['Description']}"),
+            "Program Type": "Recreation",
+            "Description": details["Description"],
+            "Link": url
+        }
+
+    except Exception as e:
+        logger.debug(f"Error parsing CPD detail {url}: {e}")
+        return None
+
+async def _fetch_chicago_parks_content(app: AsyncFirecrawl, page: int = 1) -> str:
+    """Fetch content from Chicago Park District with pagination support."""
+    url = f"{CHICAGO_PARKS_URL}?page={page}"
+    response = await firecrawl_scrape(app, url=url, only_main_content=True)
     return response.markdown if hasattr(response, "markdown") else ""
 
-async def fetch_wilmette_park_events() -> List[Dict[str, Any]]:
-    """Fetch Wilmette Park District events using Firecrawl."""
-    logger.info("Fetching Wilmette Park District events...")
-    if not FIRECRAWL_API_KEY:
-        logger.warning("FIRECRAWL_API_KEY not set; skipping Wilmette Park District fetch")
-        return []
-    app = AsyncFirecrawl(api_key=FIRECRAWL_API_KEY)
-
-    try:
-        markdown = await retry_with_backoff(_fetch_wilmette_park_content, app)
-        if not markdown:
-            logger.warning("No markdown content received from Wilmette Park District")
-            return []
-    except ValueError as e:
-        logger.error(f"Invalid response from Wilmette Park District API: {e}")
-        return []
-    except ConnectionError as e:
-        logger.error(f"Connection error while fetching Wilmette Park District events: {e}")
-        return []
-    except Exception as e:
-        logger.error(f"Unexpected error fetching Wilmette Park District events: {e}", exc_info=True)
-        return []
+def parse_chicago_parks_markdown(markdown: str) -> List[Dict[str, Any]]:
+    """Parse Chicago Park District events from markdown content."""
+    events = []
 
     if not markdown:
-        return []
+        return events
 
-    # Parse events from markdown
-    all_events = []
+    # The structure is:
+    # Dec
+    # 10
+    #
+    # ### [Event Title](link)
+    # [Address](map link)
+    # Time
 
-    try:
-        # Split by event entries - looking for typical event markers
-        # Most event listing pages have patterns like title links followed by dates
-        event_blocks = re.split(r'(?=\[([^\]]+)\]\([^)]+\)\s*(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday))', markdown)
+    # Split by event headers (### [Title](link))
+    event_pattern = r'### \[([^\]]+)\]\(([^)]+)\)'
+    event_matches = list(re.finditer(event_pattern, markdown))
 
-        for block in event_blocks:
-            if not block.strip() or len(block) < 50:
+    for i, match in enumerate(event_matches):
+        try:
+            title = match.group(1).strip()
+            event_link = match.group(2).strip()
+
+            # Get the content before this event (to find date)
+            start_pos = match.start()
+
+            # Look backwards to find the date
+            before_content = markdown[:start_pos]
+
+            # Find the last occurrence of month/day pattern before this event
+            date_pattern = r'(\w{3})\s*\n\s*(\d{1,2})\s*\n'
+            date_matches = list(re.finditer(date_pattern, before_content))
+
+            if not date_matches:
                 continue
 
-            # Extract event title and link
-            title_match = re.search(r'^\[([^\]]+)\]\(([^)]+)\)', block.strip())
-            if not title_match:
+            last_date_match = date_matches[-1]
+            month_abbr = last_date_match.group(1)
+            day = last_date_match.group(2)
+
+            # Convert to full date
+            try:
+                month_num = datetime.strptime(month_abbr, '%b').month
+                current_year = datetime.now().year
+
+                # Handle year rollover
+                if month_num < datetime.now().month and datetime.now().month >= 10:
+                    current_year += 1
+
+                event_date = datetime(current_year, month_num, int(day))
+                formatted_date = event_date.strftime("%A, %B %d, %Y")
+            except (ValueError, TypeError):
                 continue
 
-            event_title = title_match.group(1).strip()
-            event_link = title_match.group(2).strip()
+            # Get content after this event title until next event or end
+            if i + 1 < len(event_matches):
+                end_pos = event_matches[i + 1].start()
+                event_content = markdown[match.end():end_pos]
+            else:
+                event_content = markdown[match.end():]
 
-            # Make sure the link is absolute
-            if event_link and not event_link.startswith('http'):
-                event_link = f"https://wilmettepark.org{event_link if event_link.startswith('/') else '/' + event_link}"
+            # Extract location (address in brackets with map link)
+            location = "Chicago Park District"
+            address_pattern = r'\[([^]]*?(?:\d+\s+[^,]+[^]]*?))\]\([^)]*google\.com/maps[^)]*\)'
+            address_match = re.search(address_pattern, event_content)
+            if address_match:
+                address = clean_text(address_match.group(1))
+                # Clean up address formatting
+                address = re.sub(r'\\+', ' ', address)  # Remove backslashes
+                address = ' '.join(address.split())  # Normalize whitespace
+                if address:
+                    location = address
 
-            # Skip non-events (like navigation items)
-            if re.search(r'home|about|contact|policy', event_title, re.IGNORECASE):
-                continue
-
-            # Extract date
-            date_match = re.search(r'((?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4})', block)
-            if not date_match:
-                # Try alternative date format
-                date_match = re.search(r'((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4})', block)
-
-            if not date_match:
-                continue
-
-            event_date = date_match.group(1)
-
-            # Extract time (support various formats)
+            # Extract time
             time_str = "Not found"
-            time_match = re.search(r'(\d{1,2}:\d{2}\s*[ap]m\s*[\-–]\s*\d{1,2}:\d{2}\s*[ap]m|\d{1,2}:\d{2}\s*[ap]m|All\s+Day)', block, re.IGNORECASE)
+            time_pattern = r'(\d{1,2}:\d{2}\s*[AP]M\s*-\s*\d{1,2}:\d{2}\s*[AP]M|\d{1,2}:\d{2}\s*[AP]M)'
+            time_match = re.search(time_pattern, event_content, re.IGNORECASE)
             if time_match:
-                time_str = time_match.group(1).replace(' - ', '–')
+                time_str = time_match.group(1).strip()
 
-            # Extract location
-            location = "Wilmette Park District"  # Default
+            # Check if event is cancelled
+            is_cancelled = 'cancelled' in event_content.lower()
+            if is_cancelled:
+                title = f"[CANCELLED] {title}"
 
-            # Look for location/venue information
-            location_patterns = [
-                r'Location:\s*([^\n,]+)',
-                r'Venue:\s*([^\n,]+)',
-                r'at\s+([\w\s]+\s+(?:Park|Center|Field|Pool|Playground|Recreation\s+Center))',
-                r'Park:\s*([^\n,]+)',
-            ]
+            # Extract age group from title and content
+            age_group = extract_age_group(f"{title} {event_content}")
 
-            for pattern in location_patterns:
-                loc_match = re.search(pattern, block, re.IGNORECASE)
-                if loc_match:
-                    potential_location = clean_text(loc_match.group(1))
-                    if potential_location and len(potential_location.strip()) > 2:
-                        location = potential_location.strip()
-                        # Add "Wilmette Park District" if not already mentioned
-                        if "wilmette" not in location.lower() and "park" in location.lower():
-                            location = f"{location} - Wilmette Park District"
-                        break
+            # Create description
+            description = "See event page for details"
 
-            # Extract age group from content
-            age_group = extract_age_group(f"{event_title} {block}")
+            # Try to extract any descriptive text that's not address or time
+            desc_lines = []
+            for line in event_content.split('\n'):
+                line = line.strip()
+                if (line and
+                    not re.search(time_pattern, line, re.IGNORECASE) and
+                    not re.search(r'\[.*?\]\(.*?google\.com/maps', line) and
+                    not line.lower() in ['cancelled'] and
+                    len(line) > 10):
+                    desc_lines.append(clean_text(line))
 
-            # Extract description
-            description = "Not found"
+            if desc_lines:
+                description = " ".join(desc_lines[:2])
 
-            # Look for description after the title and before common footer elements
-            desc_match = re.search(r'\]\([^)]+\)\s*(?:' + re.escape(event_date) + r').*?\n\n(.*?)(?=\n\n(?:Register|More Info|View Details|Share|Add to Calendar)|\Z)', block, re.DOTALL | re.IGNORECASE)
-            if desc_match:
-                desc_text = desc_match.group(1).strip()
-                # Clean up the description
-                desc_lines = []
-                for line in desc_text.split('\n'):
-                    line = line.strip()
-                    if (line and len(line) > 15 and
-                        not re.search(r'^(Time|Date|Location|Age|Category|Register|Share):', line, re.IGNORECASE)):
-                        desc_lines.append(line)
-
-                if desc_lines:
-                    description = clean_text(" ".join(desc_lines[:3]))  # Limit to first 3 lines
-
-            all_events.append({
-                "Library": "Wilmette Park District",
-                "Title": event_title,
-                "Date": event_date,
+            events.append({
+                "Library": "Chicago Park District",
+                "Title": title,
+                "Date": formatted_date,
                 "Time": time_str,
                 "Location": location,
                 "Age Group": age_group,
-                "Program Type": "Recreation/Parks",
+                "Program Type": "Recreation",
                 "Description": description,
-                "Link": event_link
+                "Link": event_link if event_link.startswith('http') else f"https://www.chicagoparkdistrict.com{event_link}"
             })
 
+        except Exception as e:
+            logger.debug(f"Error parsing Chicago Parks event: {e}")
+            continue
+
+    return events
+
+async def fetch_chicago_parks_events() -> List[Dict[str, Any]]:
+    """Crawls Chicago Park District events with detailed page fetching."""
+    logger.info("Fetching Chicago Park District events...")
+    session = await get_http_session()
+
+    # 1. Crawl Listing Pages to find event URLs
+    # Dynamically fetch all pages until no more events found
+    event_urls = set()
+    page = 0
+    max_pages = 30  # Safety limit to prevent infinite loops
+
+    try:
+        while page < max_pages:
+            try:
+                html = await retry_with_backoff(_fetch_cpd_listing_page, session, page)
+                soup = BeautifulSoup(html, 'lxml')
+
+                # Find links that look like event pages
+                # CPD usually uses /events/event-slug
+                links = soup.find_all('a', href=re.compile(r'^/events/[^/]+$'))
+                page_event_count = 0
+
+                for link in links:
+                    href = link.get('href')
+                    # Filter out non-events and short/empty links
+                    if (href and
+                        len(href) > 8 and
+                        href != '/events/map' and
+                        href not in event_urls):
+                        event_urls.add(href)
+                        page_event_count += 1
+
+                logger.info(f"Page {page}: Found {page_event_count} new event links (total: {len(event_urls)})")
+
+                # Stop if no new events found on this page
+                if page_event_count == 0:
+                    logger.info(f"No new events found on page {page}, stopping crawl")
+                    break
+
+                page += 1
+
+                # Add delay between listing pages to be respectful
+                if page < max_pages:
+                    await asyncio.sleep(2)
+
+            except Exception as e:
+                logger.warning(f"Failed to fetch CPD listing page {page}: {e}")
+                break
     except Exception as e:
-        logger.error(f"Error parsing Wilmette Park District markdown: {e}")
+        logger.error(f"CPD crawler failed: {e}")
         return []
 
-    logger.info(f"Found {len(all_events)} events for Wilmette Park District")
-    return all_events
+    logger.info(f"Found {len(event_urls)} unique CPD event links. Fetching details...")
+
+    # 2. Fetch Details Concurrently
+    tasks = [_fetch_cpd_event_detail(session, url) for url in event_urls]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    valid_events = []
+    for res in results:
+        if isinstance(res, dict) and res.get("Date") != "Not found":
+            valid_events.append(res)
+
+    logger.info(f"Successfully extracted {len(valid_events)} CPD events")
+    return valid_events
 
 async def _fetch_fpdcc_page(session, page: int, start_date: str, end_date: str) -> Dict[str, Any]:
     """Fetch a single page of Forest Preserves events."""
@@ -1607,7 +1766,7 @@ def compute_date_window(cli_args=None) -> tuple[str, int]:
             logger.warning(f"Invalid START_OFFSET_DAYS '{env_offset}', using 0")
             offset = 0
         start_dt = datetime.now().date() + timedelta(days=offset)
-        start_date_str = start_dt.strftime("%Y-%m-%d")
+ w       start_date_str = start_dt.strftime("%Y-%m-%d")
 
     return start_date_str, days
 
@@ -1626,9 +1785,9 @@ async def main():
         fetch_bibliocommons_events("CPL Edgebrook", CPL_BASE_URL, "locations=27"),
         fetch_bibliocommons_events("CPL Budlong Woods", CPL_BASE_URL, "locations=16"),
         fetch_libnet_events("Wilmette", "wilmette.libnet.info"),
-        fetch_wilmette_park_events(),
         fetch_skokie_events(),
         fetch_skokie_parks_events(),
+        fetch_chicago_parks_events(),
         fetch_fpdcc_events(),
         fetch_libnet_events("Niles", "nmdl.libnet.info")
     ]
