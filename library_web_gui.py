@@ -30,11 +30,14 @@ DATA_DIR = Path(os.getenv("DATA_DIR", BASE_DIR)).resolve()
 TIMEZONE = os.getenv("TIMEZONE", "America/Chicago")
 TZINFO = ZoneInfo(TIMEZONE)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+PROGRESS_FILE = DATA_DIR / "scrape_progress.json"
 
 app = Flask(__name__, template_folder=str(BASE_DIR / "templates"))
 
 # Global variable to store events data
 events_data = []
+SCRAPER_THREAD = None
+SCRAPER_LOCK = threading.Lock()
 
 
 def clean_text(value: str) -> str:
@@ -364,6 +367,49 @@ def load_latest_csv():
         events_data = []
         return None
 
+
+def read_progress_file():
+    """Return the latest scrape progress snapshot for the UI."""
+    if not PROGRESS_FILE.exists():
+        return {
+            "summary": {
+                "state": "idle",
+                "message": "Waiting to start",
+                "total_sources": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "running": 0,
+                "pending": 0,
+                "events": len(events_data),
+            },
+            "sources": {}
+        }
+    try:
+        with PROGRESS_FILE.open() as f:
+            return json.load(f)
+    except Exception as exc:
+        return {"summary": {"state": "error", "message": f"Could not read progress: {exc}"}}
+
+
+def write_progress_stub(state: str, message: str):
+    """Lightweight updater for progress summary without overwriting per-source data."""
+    payload = read_progress_file()
+    now = datetime.utcnow().isoformat()
+    payload.setdefault("started_at", now)
+    payload["updated_at"] = now
+    payload.setdefault("sources", {})
+    payload["summary"] = {
+        **payload.get("summary", {}),
+        "state": state,
+        "message": message,
+        "events": payload.get("summary", {}).get("events", len(events_data)),
+        "total_sources": payload.get("summary", {}).get("total_sources", len(payload.get("sources", {})))
+    }
+    try:
+        PROGRESS_FILE.write_text(json.dumps(payload, indent=2))
+    except Exception as exc:
+        print(f"Failed to write progress stub: {exc}")
+
 @app.route('/')
 def index():
     """Main page"""
@@ -517,39 +563,67 @@ def download_pdf():
         download_name=filename
     )
 
-@app.route('/api/refresh')
+@app.route('/api/refresh', methods=['POST', 'GET'])
 def refresh_data():
-    """Refresh data by running the scraper"""
+    """Refresh data by running the scraper in the background so the UI can poll progress."""
+    global SCRAPER_THREAD
+    with SCRAPER_LOCK:
+        if SCRAPER_THREAD and SCRAPER_THREAD.is_alive():
+            return jsonify({
+                'success': False,
+                'running': True,
+                'message': 'Scraper is already running'
+            }), 409
+
+        SCRAPER_THREAD = threading.Thread(target=run_scraper_background, daemon=True)
+        SCRAPER_THREAD.start()
+
+    return jsonify({
+        'success': True,
+        'started': True,
+        'message': 'Scraper started. Progress will update below.',
+        'total_events': len(events_data)
+    })
+
+
+def run_scraper_background():
+    """Kick off the scraper in a background thread so the UI stays responsive."""
+    import subprocess
+    write_progress_stub("queued", "Starting scraper...")
+    env = os.environ.copy()
+    env["DATA_DIR"] = str(DATA_DIR)
+
     try:
-        import subprocess
-        # Use the comprehensive aggregator which preserves exact age labels
-        env = os.environ.copy()
-        env["DATA_DIR"] = str(DATA_DIR)
-        result = subprocess.run(['python3', 'library_all_events.py'], 
-                              capture_output=True, text=True, timeout=300, cwd=BASE_DIR, env=env)
-        
+        result = subprocess.run(
+            ['python3', 'library_all_events.py'],
+            capture_output=True,
+            text=True,
+            timeout=330,
+            cwd=BASE_DIR,
+            env=env
+        )
         if result.returncode == 0:
-            csv_file = load_latest_csv()
-            return jsonify({
-                'success': True, 
-                'message': f'Data refreshed successfully! Loaded from {csv_file}',
-                'total_events': len(events_data)
-            })
+            load_latest_csv()
+            # If the scraper did not emit a progress file, provide a minimal success snapshot
+            if not PROGRESS_FILE.exists():
+                write_progress_stub("completed", f"Scrape finished with {len(events_data)} events")
         else:
-            return jsonify({
-                'success': False, 
-                'message': f'Scraper failed: {result.stderr}'
-            })
+            msg = (result.stderr or result.stdout or "Unknown error").strip()
+            write_progress_stub("error", f"Scraper failed: {msg[:500]}")
     except subprocess.TimeoutExpired:
-        return jsonify({
-            'success': False, 
-            'message': 'Scraper timed out after 5 minutes'
-        })
-    except Exception as e:
-        return jsonify({
-            'success': False, 
-            'message': f'Failed to run scraper: {e}'
-        })
+        write_progress_stub("error", "Scraper timed out after 5.5 minutes")
+    except Exception as exc:
+        write_progress_stub("error", f"Failed to run scraper: {exc}")
+    finally:
+        global SCRAPER_THREAD
+        with SCRAPER_LOCK:
+            SCRAPER_THREAD = None
+
+
+@app.route('/api/progress')
+def progress_status():
+    """Expose the latest scraper progress snapshot."""
+    return jsonify(read_progress_file())
 
 def create_html_template():
     """Create the HTML template"""

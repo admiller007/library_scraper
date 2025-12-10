@@ -173,6 +173,25 @@
             </div>
         </div>
 
+        <!-- Scrape Progress -->
+        <section class="px-6 py-4 bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800">
+            <div class="flex items-center justify-between mb-3">
+                <div>
+                    <p class="text-sm font-semibold text-slate-800 dark:text-slate-200">Scrape Progress</p>
+                    <p id="progress-meta" class="text-xs text-slate-500 dark:text-slate-400">Idle</p>
+                </div>
+                <button onclick="fetchProgress(true)"
+                        class="inline-flex items-center gap-2 px-3 py-2 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
+                    <span class="material-symbols-outlined text-base">sync</span>
+                    Sync Progress
+                </button>
+            </div>
+            <div id="progress-summary" class="flex flex-wrap gap-3 text-sm text-slate-700 dark:text-slate-300">
+                <span class="text-xs text-slate-500">Waiting for a run...</span>
+            </div>
+            <div id="progress-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 mt-3"></div>
+        </section>
+
         <!-- Events Grid -->
         <main class="flex-1 p-6">
             <div id="events-grid" class="grid gap-6 grid-cols-1 lg:grid-cols-2 xl:grid-cols-3">
@@ -197,6 +216,11 @@
     <script>
         let allEvents = [];
         let filteredEvents = [];
+        let progressInterval = null;
+        let awaitingRefreshData = false;
+        let lastProgressState = 'idle';
+        let lastEventsTotal = 0;
+        let lastDataLoadTs = null;
 
         // Load events on page load
         document.addEventListener('DOMContentLoaded', function() {
@@ -229,6 +253,7 @@
             });
 
             loadEvents().then(() => applyFilters());
+            fetchProgress();
 
             // Add enter key support for search
             document.getElementById('search-input').addEventListener('keypress', function(e) {
@@ -246,6 +271,8 @@
                 const response = await fetch('/api/events');
                 const data = await response.json();
                 allEvents = data.events;
+                lastEventsTotal = data.total;
+                lastDataLoadTs = Date.now();
                 displayEvents(allEvents);
                 updateStatus(`Showing ${data.total} events`);
             } catch (error) {
@@ -442,7 +469,7 @@
         }
 
         async function refreshData() {
-            updateStatus('Refreshing data... This may take a few minutes.');
+            updateStatus('Starting scraper... This runs in the background.');
             const refreshBtn = document.getElementById('refresh-btn');
             const originalText = refreshBtn.innerHTML;
             refreshBtn.innerHTML = `
@@ -452,13 +479,19 @@
             refreshBtn.disabled = true;
 
             try {
-                const response = await fetch('/api/refresh');
+                const response = await fetch('/api/refresh', { method: 'POST' });
                 const result = await response.json();
 
-                if (result.success) {
-                    updateStatus(result.message);
-                    await loadEvents();
-                    document.getElementById('last-updated').textContent = new Date().toLocaleString();
+                if (response.ok && result.success) {
+                    awaitingRefreshData = true;
+                    startProgressPolling();
+                    fetchProgress(true);
+                    updateStatus('Scraper started. Tracking progress...');
+                } else if (result.running) {
+                    awaitingRefreshData = true;
+                    startProgressPolling();
+                    fetchProgress(true);
+                    updateStatus('A scrape is already running. Tracking progress...');
                 } else {
                     updateStatus('Error: ' + result.message);
                 }
@@ -468,6 +501,128 @@
                 refreshBtn.disabled = false;
                 refreshBtn.innerHTML = originalText;
             }
+        }
+
+        async function fetchProgress(force = false) {
+            try {
+                const response = await fetch('/api/progress');
+                const data = await response.json();
+                renderProgress(data);
+                const state = (data?.summary?.state || 'idle').toLowerCase();
+                const activeStates = ['running', 'queued', 'degraded', 'pending'];
+                if (activeStates.includes(state) || awaitingRefreshData) {
+                    startProgressPolling();
+                } else if (!awaitingRefreshData) {
+                    stopProgressPolling();
+                }
+            } catch (error) {
+                updateStatus('Could not load progress');
+            }
+        }
+
+        function renderProgress(data) {
+            const summaryEl = document.getElementById('progress-summary');
+            const gridEl = document.getElementById('progress-grid');
+            const metaEl = document.getElementById('progress-meta');
+
+            if (!data || !data.summary) {
+                summaryEl.innerHTML = '<span class="text-xs text-slate-500 dark:text-slate-400">No progress available yet.</span>';
+                gridEl.innerHTML = '';
+                return;
+            }
+
+            const summary = data.summary || {};
+            const sources = data.sources || {};
+            const state = (summary.state || 'idle').toLowerCase();
+            const updated = summary.updated_at || data.updated_at || '';
+            const totalSources = summary.total_sources || Object.keys(sources).length || 0;
+            const succeeded = summary.succeeded ?? 0;
+            const failed = summary.failed ?? 0;
+            const events = summary.events ?? '—';
+            const message = summary.message || '';
+
+            metaEl.textContent = `${stateLabel(state)}${updated ? ` • Updated ${new Date(updated).toLocaleTimeString()}` : ''}`;
+
+            summaryEl.innerHTML = `
+                <span class="${stateBadgeClass(state)}">${stateLabel(state)}</span>
+                <span class="text-xs text-slate-600 dark:text-slate-400">Sources: ${succeeded}/${totalSources}${failed ? `, ${failed} failed` : ''}</span>
+                <span class="text-xs text-slate-600 dark:text-slate-400">Events: ${events}</span>
+                ${message ? `<span class="text-xs text-slate-500 dark:text-slate-400">${escapeHtml(message)}</span>` : ''}
+            `;
+
+            if (!totalSources) {
+                gridEl.innerHTML = `<div class="text-sm text-slate-600 dark:text-slate-400">No runs yet.</div>`;
+            } else {
+                gridEl.innerHTML = Object.entries(sources).map(([name, payload]) => {
+                    const srcState = (payload.state || 'pending').toLowerCase();
+                    const count = payload.count ?? '—';
+                    const msg = payload.message ? `<div class="text-xs text-slate-500 dark:text-slate-400 mt-1">${escapeHtml(payload.message)}</div>` : '';
+                    return `
+                        <div class="border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-900 p-3 shadow-sm">
+                            <div class="flex items-center justify-between mb-1">
+                                <span class="text-sm font-semibold text-slate-800 dark:text-slate-100">${escapeHtml(name)}</span>
+                                <span class="${stateBadgeClass(srcState)}">${stateLabel(srcState)}</span>
+                            </div>
+                            <div class="text-xs text-slate-600 dark:text-slate-400">Events: ${count}</div>
+                            ${msg}
+                        </div>
+                    `;
+                }).join('');
+            }
+
+            const finishedStates = ['completed', 'completed_with_errors', 'error'];
+            if (finishedStates.includes(state) && state !== lastProgressState) {
+                awaitingRefreshData = false;
+                loadEvents().then(() => {
+                    document.getElementById('last-updated').textContent = new Date().toLocaleString();
+                });
+                updateStatus(state === 'error' ? 'Scrape failed. Showing last available data.' : 'Scrape finished. Reloaded events.');
+                stopProgressPolling();
+            }
+
+            lastProgressState = state;
+        }
+
+        function startProgressPolling() {
+            if (progressInterval) return;
+            progressInterval = setInterval(() => fetchProgress(), 2500);
+        }
+
+        function stopProgressPolling() {
+            if (progressInterval) {
+                clearInterval(progressInterval);
+                progressInterval = null;
+            }
+        }
+
+        function stateLabel(state) {
+            const labels = {
+                idle: 'Idle',
+                pending: 'Pending',
+                queued: 'Queued',
+                running: 'Running',
+                success: 'Done',
+                completed: 'Completed',
+                completed_with_errors: 'Completed (with issues)',
+                degraded: 'Partial',
+                error: 'Error'
+            };
+            return labels[state] || state;
+        }
+
+        function stateBadgeClass(state) {
+            const base = "inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full font-semibold";
+            const styles = {
+                pending: `${base} bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200`,
+                queued: `${base} bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200`,
+                running: `${base} bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200`,
+                success: `${base} bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200`,
+                completed: `${base} bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200`,
+                completed_with_errors: `${base} bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200`,
+                degraded: `${base} bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200`,
+                error: `${base} bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-200`
+            };
+            return styles[state] || `${base} bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200`;
         }
 
         function updateStatus(message) {

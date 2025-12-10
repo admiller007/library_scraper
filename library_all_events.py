@@ -1,5 +1,6 @@
 import asyncio
 import csv
+import json
 import logging
 from logging.handlers import RotatingFileHandler
 import os
@@ -9,9 +10,9 @@ import aiohttp
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from pathlib import Path
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, FeatureNotFound
 try:
     from firecrawl import AsyncFirecrawl as _AsyncFirecrawlClient  # v2 SDK
     _FIRECRAWL_V2 = True
@@ -52,7 +53,7 @@ FIRECRAWL_API_KEY = os.getenv('FIRECRAWL_API_KEY', 'fc-fe1ba845d9c748c1871061a83
 TIMEZONE = os.getenv('TIMEZONE', 'America/Chicago')
 
 # Date window configuration (computed at runtime in main())
-DEFAULT_DAYS_TO_FETCH = 31
+DEFAULT_DAYS_TO_FETCH = 90
 START_DATE = None  # will be set in main()
 DAYS_TO_FETCH = DEFAULT_DAYS_TO_FETCH  # will be set in main()
 MAX_RETRIES = 3
@@ -104,6 +105,114 @@ CPD_SEM = asyncio.Semaphore(CPD_CONCURRENCY)
 # Global session for connection pooling
 _http_session = None
 
+# --- PROGRESS TRACKING ---
+PROGRESS_FILE = DATA_DIR / "scrape_progress.json"
+PROGRESS_SOURCES = [
+    "Lincolnwood",
+    "Morton Grove (MGPL)",
+    "Glencoe",
+    "Evanston",
+    "CPL Edgebrook",
+    "CPL Budlong Woods",
+    "Wilmette",
+    "Skokie Library",
+    "Skokie Parks",
+    "Chicago Parks",
+    "Forest Preserves",
+    "Niles"
+]
+progress_state: Dict[str, Any] = {}
+progress_lock = asyncio.Lock()
+
+
+def _compute_summary_from_sources(sources: Dict[str, Dict[str, Any]], existing_events: int = 0, message: str = "", state_override: Optional[str] = None) -> Dict[str, Any]:
+    """Compute an aggregate view from individual source states."""
+    succeeded = sum(1 for s in sources.values() if s.get("state") == "success")
+    failed = sum(1 for s in sources.values() if s.get("state") == "error")
+    running = sum(1 for s in sources.values() if s.get("state") == "running")
+    pending = sum(1 for s in sources.values() if s.get("state") == "pending")
+    total = len(sources)
+    events = sum(int(s.get("count") or 0) for s in sources.values())
+    overall = "running"
+    if state_override:
+        overall = state_override
+    elif running == 0 and pending == 0:
+        overall = "completed_with_errors" if failed else "completed"
+    elif failed:
+        overall = "degraded"
+
+    return {
+        "state": overall,
+        "total_sources": total,
+        "succeeded": succeeded,
+        "failed": failed,
+        "running": running,
+        "pending": pending,
+        "events": events or existing_events,
+        "message": message
+    }
+
+
+def _safe_write_progress():
+    try:
+        PROGRESS_FILE.write_text(json.dumps(progress_state, indent=2))
+    except Exception as exc:  # pragma: no cover - best effort safety
+        logger.warning(f"Failed to write progress file: {exc}")
+
+
+async def init_progress_state():
+    """Initialize the shared progress file so the UI can poll immediately."""
+    global progress_state
+    now = datetime.utcnow().isoformat()
+    progress_state = {
+        "started_at": now,
+        "updated_at": now,
+        "sources": {name: {"state": "pending", "count": 0, "message": ""} for name in PROGRESS_SOURCES},
+    }
+    progress_state["summary"] = _compute_summary_from_sources(progress_state["sources"])
+    _safe_write_progress()
+
+
+async def mark_progress(source: str, state: str, count: Optional[int] = None, message: str = ""):
+    """Update a single source entry and recompute summary."""
+    async with progress_lock:
+        if not progress_state:
+            await init_progress_state()
+        src = progress_state["sources"].setdefault(source, {"state": "pending", "count": 0, "message": ""})
+        src["state"] = state
+        if count is not None:
+            src["count"] = count
+        if message:
+            src["message"] = message
+        progress_state["updated_at"] = datetime.utcnow().isoformat()
+        progress_state["summary"] = _compute_summary_from_sources(progress_state["sources"], progress_state.get("summary", {}).get("events", 0), message=progress_state.get("summary", {}).get("message", ""))
+        _safe_write_progress()
+
+
+async def mark_overall_state(state: str, total_events: Optional[int] = None, message: str = ""):
+    """Update the top-level summary (e.g., finished, failed)."""
+    async with progress_lock:
+        if not progress_state:
+            await init_progress_state()
+        events = total_events if total_events is not None else progress_state.get("summary", {}).get("events", 0)
+        progress_state["summary"] = _compute_summary_from_sources(progress_state["sources"], existing_events=events, message=message, state_override=state)
+        progress_state["summary"]["events"] = events
+        progress_state["updated_at"] = datetime.utcnow().isoformat()
+        _safe_write_progress()
+
+
+async def run_source_with_progress(label: str, coroutine_factory):
+    """Wrap a scraper coroutine to report progress consistently."""
+    await mark_progress(label, "running")
+    try:
+        result = await coroutine_factory()
+        count = len(result) if isinstance(result, list) else 0
+        await mark_progress(label, "success", count=count)
+        return result
+    except Exception as exc:
+        await mark_progress(label, "error", message=str(exc))
+        raise
+
 async def get_http_session():
     global _http_session
     if _http_session is None:
@@ -117,6 +226,15 @@ async def close_http_session():
     if _http_session:
         await _http_session.close()
         _http_session = None
+
+
+def _make_soup(html: str) -> BeautifulSoup:
+    """Create a BeautifulSoup object, preferring lxml, with fallback to html.parser."""
+    try:
+        return BeautifulSoup(html, "lxml")
+    except FeatureNotFound:
+        logger.warning("lxml parser not available; falling back to html.parser")
+        return BeautifulSoup(html, "html.parser")
 
 # --- HELPER FUNCTIONS ---
 
@@ -1144,8 +1262,9 @@ async def fetch_skokie_events() -> List[Dict[str, Any]]:
 async def _fetch_cpd_listing_page(session, page: int) -> str:
     """Fetch one page of the CPD events listing using direct HTTP requests."""
     url = f"{CPD_EVENTS_LIST_URL}?page={page}"
+    headers = {"User-Agent": "LibraryScraper/1.0 (+https://github.com/)"}
     async with CPD_SEM:
-        async with session.get(url) as resp:
+        async with session.get(url, headers=headers) as resp:
             resp.raise_for_status()
             return await resp.text()
 
@@ -1155,15 +1274,16 @@ async def _fetch_cpd_event_detail(session, url: str) -> Dict[str, Any]:
         url = f"{CPD_BASE_URL}{url}"
 
     try:
+        headers = {"User-Agent": "LibraryScraper/1.0 (+https://github.com/)"}
         async with CPD_SEM:
-            async with session.get(url, timeout=10) as resp:
+            async with session.get(url, timeout=10, headers=headers) as resp:
                 resp.raise_for_status()
                 html = await resp.text()
                 # Small delay to be respectful
                 await asyncio.sleep(0.5)
 
         # Parse HTML using BeautifulSoup
-        soup = BeautifulSoup(html, 'lxml')
+                soup = _make_soup(html)
         details = {"Description": "Not found", "Time": "Not found", "Date": "Not found", "Location": "Chicago Park District"}
 
         # 1. Extract Title
@@ -1380,7 +1500,7 @@ async def fetch_chicago_parks_events() -> List[Dict[str, Any]]:
         while page < max_pages:
             try:
                 html = await retry_with_backoff(_fetch_cpd_listing_page, session, page)
-                soup = BeautifulSoup(html, 'lxml')
+                soup = _make_soup(html)
 
                 # Find links that look like event pages
                 # CPD usually uses /events/event-slug
@@ -1406,6 +1526,9 @@ async def fetch_chicago_parks_events() -> List[Dict[str, Any]]:
 
                 page += 1
 
+                if page % 5 == 0:
+                    logger.debug(f"CPD progress: crawled up to page {page}, total links {len(event_urls)}")
+
                 # Add delay between listing pages to be respectful
                 if page < max_pages:
                     await asyncio.sleep(2)
@@ -1427,8 +1550,19 @@ async def fetch_chicago_parks_events() -> List[Dict[str, Any]]:
     for res in results:
         if isinstance(res, dict) and res.get("Date") != "Not found":
             valid_events.append(res)
+        elif isinstance(res, dict):
+            logger.debug(f"CPD event dropped (missing date): title={res.get('Title')} link={res.get('Link')}")
+        elif isinstance(res, Exception):
+            logger.debug(f"CPD detail error: {res}")
 
-    logger.info(f"Successfully extracted {len(valid_events)} CPD events")
+    logger.info(f"Successfully extracted {len(valid_events)} CPD events (direct detail parsing)")
+
+    # Debug insight: how many results were invalid
+    invalid_count = sum(1 for res in results if isinstance(res, dict) and res.get("Date") == "Not found")
+    error_count = sum(1 for res in results if isinstance(res, Exception))
+    if invalid_count or error_count or not valid_events:
+        logger.warning(f"CPD scrape diagnostics - valid: {len(valid_events)}, invalid_no_date: {invalid_count}, exceptions: {error_count}")
+
     return valid_events
 
 async def _fetch_fpdcc_page(session, page: int, start_date: str, end_date: str) -> Dict[str, Any]:
@@ -1776,136 +1910,153 @@ async def main():
     START_DATE, DAYS_TO_FETCH = compute_date_window()
     logger.info(f"Using date window: start={START_DATE}, days={DAYS_TO_FETCH}")
 
-    # Define tasks for all library systems (NO age group filtering)
-    tasks = [
-        fetch_lincolnwood_events(),
-        fetch_mgpl_events(),
-        fetch_glencoe_events(),
-        fetch_bibliocommons_events("Evanston", EVANSTON_BASE_URL),
-        fetch_bibliocommons_events("CPL Edgebrook", CPL_BASE_URL, "locations=27"),
-        fetch_bibliocommons_events("CPL Budlong Woods", CPL_BASE_URL, "locations=16"),
-        fetch_libnet_events("Wilmette", "wilmette.libnet.info"),
-        fetch_skokie_events(),
-        fetch_skokie_parks_events(),
-        fetch_chicago_parks_events(),
-        fetch_fpdcc_events(),
-        fetch_libnet_events("Niles", "nmdl.libnet.info")
-    ]
-    
     try:
-        all_results = await asyncio.gather(*tasks, return_exceptions=True)
-    finally:
-        # Ensure session cleanup
-        await close_http_session()
+        # Define tasks for all library systems (NO age group filtering)
+        await init_progress_state()
+        sources = [
+            ("Lincolnwood", lambda: fetch_lincolnwood_events()),
+            ("Morton Grove (MGPL)", lambda: fetch_mgpl_events()),
+            ("Glencoe", lambda: fetch_glencoe_events()),
+            ("Evanston", lambda: fetch_bibliocommons_events("Evanston", EVANSTON_BASE_URL)),
+            ("CPL Edgebrook", lambda: fetch_bibliocommons_events("CPL Edgebrook", CPL_BASE_URL, "locations=27")),
+            ("CPL Budlong Woods", lambda: fetch_bibliocommons_events("CPL Budlong Woods", CPL_BASE_URL, "locations=16")),
+            ("Wilmette", lambda: fetch_libnet_events("Wilmette", "wilmette.libnet.info")),
+            ("Skokie Library", lambda: fetch_skokie_events()),
+            ("Skokie Parks", lambda: fetch_skokie_parks_events()),
+            ("Chicago Parks", lambda: fetch_chicago_parks_events()),
+            ("Forest Preserves", lambda: fetch_fpdcc_events()),
+            ("Niles", lambda: fetch_libnet_events("Niles", "nmdl.libnet.info"))
+        ]
 
-    all_events = [event for res in all_results if isinstance(res, list) for event in res]
-    logger.info(f"Total events found: {len(all_events)}")
+        tasks = [run_source_with_progress(label, fn) for label, fn in sources]
 
-    # Remove duplicates
-    unique_events, seen = [], set()
-    for event in all_events:
-        identifier = (event.get('Library'), event.get('Title'), event.get('Date'), event.get('Time'))
-        if identifier not in seen:
-            unique_events.append(event); seen.add(identifier)
-    logger.info(f"Total events after de-duplication: {len(unique_events)}")
-    all_events = unique_events
-
-    if not all_events: 
-        logger.info("No events found")
-        return
-
-    # Determine the requested date window
-    try:
-        window_start = datetime.strptime(START_DATE, "%Y-%m-%d").date()
-    except (TypeError, ValueError):
-        logger.warning("Invalid START_DATE; defaulting filter to today's date")
-        window_start = datetime.now().date()
-    window_end = window_start + timedelta(days=max(DAYS_TO_FETCH - 1, 0))
-
-    # Process and add datetime objects for sorting and ICS generation
-    for event in all_events:
         try:
-            if not isinstance(event, dict):
-                logger.warning(f"Skipping invalid event type: {type(event)}")
-                continue
+            all_results = await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            # Ensure session cleanup
+            await close_http_session()
+
+        errors = [res for res in all_results if isinstance(res, Exception)]
+        had_errors = bool(errors)
+        if had_errors:
+            logger.error(f"{len(errors)} sources failed during scrape")
+
+        all_events = [event for res in all_results if isinstance(res, list) for event in res]
+        logger.info(f"Total events found: {len(all_events)}")
+
+        # Remove duplicates
+        unique_events, seen = [], set()
+        for event in all_events:
+            identifier = (event.get('Library'), event.get('Title'), event.get('Date'), event.get('Time'))
+            if identifier not in seen:
+                unique_events.append(event); seen.add(identifier)
+        logger.info(f"Total events after de-duplication: {len(unique_events)}")
+        all_events = unique_events
+
+        if not all_events: 
+            logger.info("No events found")
+            await mark_overall_state("completed_with_errors" if had_errors else "completed", total_events=0, message="No events found")
+            return
+
+        # Determine the requested date window
+        try:
+            window_start = datetime.strptime(START_DATE, "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            logger.warning("Invalid START_DATE; defaulting filter to today's date")
+            window_start = datetime.now().date()
+        window_end = window_start + timedelta(days=max(DAYS_TO_FETCH - 1, 0))
+
+        # Process and add datetime objects for sorting and ICS generation
+        for event in all_events:
+            try:
+                if not isinstance(event, dict):
+                    logger.warning(f"Skipping invalid event type: {type(event)}")
+                    continue
+                    
+                date_str = event.get('Date', '')
+                if not date_str or date_str == 'Not found':
+                    logger.debug(f"Event '{event.get('Title', 'Unknown')}' has no valid date")
+                    event['datetime_obj'] = datetime.max
+                    continue
+                    
+                date_str_cleaned = date_str.replace(',', '').replace(' at', '')
+                dt_obj = None
                 
-            date_str = event.get('Date', '')
-            if not date_str or date_str == 'Not found':
-                logger.debug(f"Event '{event.get('Title', 'Unknown')}' has no valid date")
+                # Try different date formats
+                date_formats = [
+                    ("%A %B %d %Y", r'\w+ \w+ \d{1,2} \d{4}'),
+                    ("%b %d %Y", r'\w{3} \d{1,2} \d{4}'),
+                    ("%Y-%m-%d", r'\d{4}-\d{2}-\d{2}')
+                ]
+                
+                for fmt, pattern in date_formats:
+                    if re.fullmatch(pattern, date_str_cleaned):
+                        try:
+                            dt_obj = datetime.strptime(date_str_cleaned, fmt)
+                            break
+                        except ValueError as e:
+                            logger.debug(f"Failed to parse date '{date_str_cleaned}' with format '{fmt}': {e}")
+                            continue
+                
+                if dt_obj:
+                    event['datetime_obj'] = dt_obj
+                    event['Date'] = dt_obj.strftime("%A, %B %d, %Y")
+                else:
+                    logger.debug(f"Could not parse date '{date_str_cleaned}' for event '{event.get('Title', 'Unknown')}'")
+                    event['datetime_obj'] = datetime.max
+                    
+            except Exception as e:
+                logger.warning(f"Error processing event datetime: {e}")
                 event['datetime_obj'] = datetime.max
-                continue
                 
-            date_str_cleaned = date_str.replace(',', '').replace(' at', '')
-            dt_obj = None
-            
-            # Try different date formats
-            date_formats = [
-                ("%A %B %d %Y", r'\w+ \w+ \d{1,2} \d{4}'),
-                ("%b %d %Y", r'\w{3} \d{1,2} \d{4}'),
-                ("%Y-%m-%d", r'\d{4}-\d{2}-\d{2}')
-            ]
-            
-            for fmt, pattern in date_formats:
-                if re.fullmatch(pattern, date_str_cleaned):
-                    try:
-                        dt_obj = datetime.strptime(date_str_cleaned, fmt)
-                        break
-                    except ValueError as e:
-                        logger.debug(f"Failed to parse date '{date_str_cleaned}' with format '{fmt}': {e}")
-                        continue
-            
-            if dt_obj:
-                event['datetime_obj'] = dt_obj
-                event['Date'] = dt_obj.strftime("%A, %B %d, %Y")
-            else:
-                logger.debug(f"Could not parse date '{date_str_cleaned}' for event '{event.get('Title', 'Unknown')}'")
-                event['datetime_obj'] = datetime.max
-                
+            event['time_obj'] = parse_time_to_sortable(event.get('Time', ''))
+
+        # Filter events to the requested window
+        filtered_events = []
+        for event in all_events:
+            dt_obj = event.get('datetime_obj')
+            if isinstance(dt_obj, datetime) and window_start <= dt_obj.date() <= window_end:
+                filtered_events.append(event)
+        if not filtered_events:
+            logger.info("No events fall within the requested date window")
+            await mark_overall_state("completed_with_errors" if had_errors else "completed", total_events=0, message="No events fall within the requested date window")
+            return
+        all_events = filtered_events
+
+        # Sort events by date, library, and time
+        all_events.sort(key=lambda x: (x.get('datetime_obj', datetime.max), x['Library'], x.get('time_obj', datetime.min.time())))
+
+        # Generate reports
+        base_filename = DATA_DIR / f"all_library_events_{datetime.now():%Y%m%d}"
+        
+        # Generate ICS and PDF reports
+        generate_ics_file(all_events, base_filename)
+        generate_pdf_report(all_events, base_filename)
+
+        # Prepare DataFrame for CSV (dropping temporary datetime helper columns)
+        try:
+            df = pd.DataFrame(all_events).drop(columns=['datetime_obj', 'time_obj'], errors='ignore')
+            csv_filename = base_filename.with_suffix('.csv')
+            df.to_csv(csv_filename, index=False, quoting=csv.QUOTE_ALL)
+            logger.info(f"Combined CSV report saved to {csv_filename}")
         except Exception as e:
-            logger.warning(f"Error processing event datetime: {e}")
-            event['datetime_obj'] = datetime.max
-            
-        event['time_obj'] = parse_time_to_sortable(event.get('Time', ''))
+            logger.error(f"Error generating CSV report: {e}", exc_info=True)
 
-    # Filter events to the requested window
-    filtered_events = []
-    for event in all_events:
-        dt_obj = event.get('datetime_obj')
-        if isinstance(dt_obj, datetime) and window_start <= dt_obj.date() <= window_end:
-            filtered_events.append(event)
-    if not filtered_events:
-        logger.info("No events fall within the requested date window")
-        return
-    all_events = filtered_events
+        final_state = "completed_with_errors" if had_errors else "completed"
+        await mark_overall_state(final_state, total_events=len(all_events), message="Scrape finished")
 
-    # Sort events by date, library, and time
-    all_events.sort(key=lambda x: (x.get('datetime_obj', datetime.max), x['Library'], x.get('time_obj', datetime.min.time())))
-
-    # Generate reports
-    base_filename = DATA_DIR / f"all_library_events_{datetime.now():%Y%m%d}"
-    
-    # Generate ICS and PDF reports
-    generate_ics_file(all_events, base_filename)
-    generate_pdf_report(all_events, base_filename)
-
-    # Prepare DataFrame for CSV (dropping temporary datetime helper columns)
-    try:
-        df = pd.DataFrame(all_events).drop(columns=['datetime_obj', 'time_obj'], errors='ignore')
-        csv_filename = base_filename.with_suffix('.csv')
-        df.to_csv(csv_filename, index=False, quoting=csv.QUOTE_ALL)
-        logger.info(f"Combined CSV report saved to {csv_filename}")
-    except Exception as e:
-        logger.error(f"Error generating CSV report: {e}", exc_info=True)
-
-    # Print summary by age group
-    age_group_counts = {}
-    for event in all_events:
-        age_group = event.get('Age Group', 'Unknown')
-        age_group_counts[age_group] = age_group_counts.get(age_group, 0) + 1
-    
-    logger.info("Events by Age Group:")
-    for age_group, count in sorted(age_group_counts.items()):
-        logger.info(f"  {age_group}: {count} events")
+        # Print summary by age group
+        age_group_counts = {}
+        for event in all_events:
+            age_group = event.get('Age Group', 'Unknown')
+            age_group_counts[age_group] = age_group_counts.get(age_group, 0) + 1
+        
+        logger.info("Events by Age Group:")
+        for age_group, count in sorted(age_group_counts.items()):
+            logger.info(f"  {age_group}: {count} events")
+    except Exception as exc:
+        await mark_overall_state("error", message=str(exc))
+        raise
 
 if __name__ == "__main__":
     asyncio.run(main())
