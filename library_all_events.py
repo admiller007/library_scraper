@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 from bs4 import BeautifulSoup, FeatureNotFound
+from bs4 import BeautifulSoup
 try:
     from firecrawl import AsyncFirecrawl as _AsyncFirecrawlClient  # v2 SDK
     _FIRECRAWL_V2 = True
@@ -1265,6 +1266,8 @@ async def _fetch_cpd_listing_page(session, page: int) -> str:
     headers = {"User-Agent": "LibraryScraper/1.0 (+https://github.com/)"}
     async with CPD_SEM:
         async with session.get(url, headers=headers) as resp:
+    async with CPD_SEM:
+        async with session.get(url) as resp:
             resp.raise_for_status()
             return await resp.text()
 
@@ -1277,6 +1280,8 @@ async def _fetch_cpd_event_detail(session, url: str) -> Dict[str, Any]:
         headers = {"User-Agent": "LibraryScraper/1.0 (+https://github.com/)"}
         async with CPD_SEM:
             async with session.get(url, timeout=10, headers=headers) as resp:
+        async with CPD_SEM:
+            async with session.get(url, timeout=10) as resp:
                 resp.raise_for_status()
                 html = await resp.text()
                 # Small delay to be respectful
@@ -1284,6 +1289,7 @@ async def _fetch_cpd_event_detail(session, url: str) -> Dict[str, Any]:
 
         # Parse HTML using BeautifulSoup
                 soup = _make_soup(html)
+        soup = BeautifulSoup(html, 'lxml')
         details = {"Description": "Not found", "Time": "Not found", "Date": "Not found", "Location": "Chicago Park District"}
 
         # 1. Extract Title
@@ -1563,6 +1569,66 @@ async def fetch_chicago_parks_events() -> List[Dict[str, Any]]:
     if invalid_count or error_count or not valid_events:
         logger.warning(f"CPD scrape diagnostics - valid: {len(valid_events)}, invalid_no_date: {invalid_count}, exceptions: {error_count}")
 
+
+    # 1. Crawl Listing Pages to find event URLs
+    # Dynamically fetch all pages until no more events found
+    event_urls = set()
+    page = 0
+    max_pages = 30  # Safety limit to prevent infinite loops
+
+    try:
+        while page < max_pages:
+            try:
+                html = await retry_with_backoff(_fetch_cpd_listing_page, session, page)
+                soup = BeautifulSoup(html, 'lxml')
+
+                # Find links that look like event pages
+                # CPD usually uses /events/event-slug
+                links = soup.find_all('a', href=re.compile(r'^/events/[^/]+$'))
+                page_event_count = 0
+
+                for link in links:
+                    href = link.get('href')
+                    # Filter out non-events and short/empty links
+                    if (href and
+                        len(href) > 8 and
+                        href != '/events/map' and
+                        href not in event_urls):
+                        event_urls.add(href)
+                        page_event_count += 1
+
+                logger.info(f"Page {page}: Found {page_event_count} new event links (total: {len(event_urls)})")
+
+                # Stop if no new events found on this page
+                if page_event_count == 0:
+                    logger.info(f"No new events found on page {page}, stopping crawl")
+                    break
+
+                page += 1
+
+                # Add delay between listing pages to be respectful
+                if page < max_pages:
+                    await asyncio.sleep(2)
+
+            except Exception as e:
+                logger.warning(f"Failed to fetch CPD listing page {page}: {e}")
+                break
+    except Exception as e:
+        logger.error(f"CPD crawler failed: {e}")
+        return []
+
+    logger.info(f"Found {len(event_urls)} unique CPD event links. Fetching details...")
+
+    # 2. Fetch Details Concurrently
+    tasks = [_fetch_cpd_event_detail(session, url) for url in event_urls]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    valid_events = []
+    for res in results:
+        if isinstance(res, dict) and res.get("Date") != "Not found":
+            valid_events.append(res)
+
+    logger.info(f"Successfully extracted {len(valid_events)} CPD events")
     return valid_events
 
 async def _fetch_fpdcc_page(session, page: int, start_date: str, end_date: str) -> Dict[str, Any]:
