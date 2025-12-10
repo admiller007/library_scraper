@@ -186,7 +186,11 @@ async def mark_progress(source: str, state: str, count: Optional[int] = None, me
         if message:
             src["message"] = message
         progress_state["updated_at"] = datetime.utcnow().isoformat()
-        progress_state["summary"] = _compute_summary_from_sources(progress_state["sources"], progress_state.get("summary", {}).get("events", 0), message=progress_state.get("summary", {}).get("message", ""))
+        progress_state["summary"] = _compute_summary_from_sources(
+            progress_state["sources"],
+            progress_state.get("summary", {}).get("events", 0),
+            message=progress_state.get("summary", {}).get("message", "")
+        )
         _safe_write_progress()
 
 
@@ -196,7 +200,12 @@ async def mark_overall_state(state: str, total_events: Optional[int] = None, mes
         if not progress_state:
             await init_progress_state()
         events = total_events if total_events is not None else progress_state.get("summary", {}).get("events", 0)
-        progress_state["summary"] = _compute_summary_from_sources(progress_state["sources"], existing_events=events, message=message, state_override=state)
+        progress_state["summary"] = _compute_summary_from_sources(
+            progress_state["sources"],
+            existing_events=events,
+            message=message,
+            state_override=state
+        )
         progress_state["summary"]["events"] = events
         progress_state["updated_at"] = datetime.utcnow().isoformat()
         _safe_write_progress()
@@ -214,6 +223,7 @@ async def run_source_with_progress(label: str, coroutine_factory):
         await mark_progress(label, "error", message=str(exc))
         raise
 
+
 async def get_http_session():
     global _http_session
     if _http_session is None:
@@ -221,6 +231,7 @@ async def get_http_session():
         connector = aiohttp.TCPConnector(limit=20, limit_per_host=5)
         _http_session = aiohttp.ClientSession(timeout=timeout, connector=connector)
     return _http_session
+
 
 async def close_http_session():
     global _http_session
@@ -244,7 +255,8 @@ async def retry_with_backoff(func, *args, max_retries=MAX_RETRIES, delay=RETRY_D
     for attempt in range(max_retries):
         try:
             return await func(*args, **kwargs)
-        except (ConnectionError, requests.exceptions.ConnectionError, requests.exceptions.Timeout, aiohttp.ClientConnectionError, aiohttp.ServerTimeoutError) as e:
+        except (ConnectionError, requests.exceptions.ConnectionError, requests.exceptions.Timeout,
+                aiohttp.ClientConnectionError, aiohttp.ServerTimeoutError) as e:
             if attempt == max_retries - 1:
                 logger.error(f"Failed after {max_retries} attempts: {e}")
                 raise
@@ -331,12 +343,14 @@ def parse_time_to_sortable(time_str: str) -> datetime.time:
     try:
         time_str = time_str.lower().strip().split('@')[-1]
         time_str = re.split(r'–|-', time_str)[0].strip()
-        if 'all day' in time_str: return datetime.min.time()
+        if 'all day' in time_str:
+            return datetime.min.time()
         formats_to_try = ['%I:%M %p', '%I:%M%p', '%-I:%M %p', '%I %p', '%-I%p']
         for fmt in formats_to_try:
             try:
                 return datetime.strptime(time_str.replace(" ", ""), fmt).time()
-            except ValueError: continue
+            except ValueError:
+                continue
         logger.debug(f"Could not parse time string: {time_str}")
         return datetime.min.time()
     except Exception as e:
@@ -421,7 +435,8 @@ async def fetch_lincolnwood_events() -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Unexpected error fetching Lincolnwood events: {e}", exc_info=True)
         return []
-    if not markdown: return []
+    if not markdown:
+        return []
     try:
         events_raw = markdown.split("### ")[1:]
     except (IndexError, AttributeError) as e:
@@ -633,15 +648,18 @@ def parse_bibliocommons_markdown(markdown: str, library_name: str) -> List[Dict[
     """Helper function to parse the specific markdown from Bibliocommons sites."""
     try:
         events_section = markdown.split('## Event items')[1]
-    except IndexError: return []
+    except IndexError:
+        return []
     event_blocks, page_events = re.split(r'-\s+\w{3}\n', events_section), []
     for block in event_blocks[1:]:
         title_match = re.search(r'### \[(.*?)\]\((.*?)\)', block)
-        if not title_match: continue
+        if not title_match:
+            continue
         title, link = title_match.groups()
         
         datetime_match = re.search(r'(\w+,\s+\w+\s+\d{1,2})on.*?(\d{4}),\s*(\d{1,2}:\d{2}[ap]m–\d{1,2}:\d{2}[ap]m)', block)
-        if not datetime_match: continue
+        if not datetime_match:
+            continue
         date_part, year, time_part = datetime_match.groups()
         
         # Enhanced location parsing for Bibliocommons
@@ -667,7 +685,17 @@ def parse_bibliocommons_markdown(markdown: str, library_name: str) -> List[Dict[
         # Extract age group from content
         age_group = extract_age_group(f"{title} {description}")
         
-        page_events.append({"Library": library_name, "Title": title, "Date": f"{date_part}, {year}", "Time": time_part.replace('–', ' - '), "Location": location, "Age Group": age_group, "Program Type": "Not found", "Description": description, "Link": link})
+        page_events.append({
+            "Library": library_name,
+            "Title": title,
+            "Date": f"{date_part}, {year}",
+            "Time": time_part.replace('–', ' - '),
+            "Location": location,
+            "Age Group": age_group,
+            "Program Type": "Not found",
+            "Description": description,
+            "Link": link
+        })
     return page_events
 
 async def fetch_bibliocommons_events(library_name: str, base_url: str, query_params: str = "") -> List[Dict[str, Any]]:
@@ -790,7 +818,8 @@ async def fetch_libnet_events(library_name: str, base_url: str) -> List[Dict[str
                             for key in ("name", "title", "label", "text", "value"):
                                 s = v.get(key)
                                 if isinstance(s, str) and s.strip():
-                                    out.append(s.strip()); break
+                                    out.append(s.strip())
+                                    break
                     return out
                 if isinstance(val, dict):
                     # Single dict with a label
@@ -1159,7 +1188,12 @@ async def fetch_skokie_events() -> List[Dict[str, Any]]:
                 continue
             
             # Extract date
-            date_match = re.search(r'((?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4})', block)
+            date_match = re.search(
+                r'((?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+'
+                r'(?:January|February|March|April|May|June|July|August|September|October|November|December)'
+                r'\s+\d{1,2},\s+\d{4})',
+                block
+            )
             if not date_match:
                 continue
                 
@@ -1167,7 +1201,11 @@ async def fetch_skokie_events() -> List[Dict[str, Any]]:
             
             # Extract time (support hyphen and en-dash ranges)
             time_str = "Not found"
-            time_match = re.search(r'(\d{1,2}:\d{2}[ap]m\s*[\-–]\s*\d{1,2}:\d{2}[ap]m|\d{1,2}:\d{2}[ap]m|All\s+Day)', block, re.IGNORECASE)
+            time_match = re.search(
+                r'(\d{1,2}:\d{2}[ap]m\s*[\-–]\s*\d{1,2}:\d{2}[ap]m|\d{1,2}:\d{2}[ap]m|All\s+Day)',
+                block,
+                re.IGNORECASE
+            )
             if time_match:
                 time_str = time_match.group(1).replace(' - ', '–')
             
@@ -1260,18 +1298,20 @@ async def fetch_skokie_events() -> List[Dict[str, Any]]:
     logger.info(f"Found {len(all_events)} events for Skokie")
     return all_events
 
+# -------------------------
+# CHICAGO PARK DISTRICT HELPERS (FIXED)
+# -------------------------
+
 async def _fetch_cpd_listing_page(session, page: int) -> str:
     """Fetch one page of the CPD events listing using direct HTTP requests."""
     url = f"{CPD_EVENTS_LIST_URL}?page={page}"
     headers = {"User-Agent": "LibraryScraper/1.0 (+https://github.com/)"}
     async with CPD_SEM:
         async with session.get(url, headers=headers) as resp:
-    async with CPD_SEM:
-        async with session.get(url) as resp:
             resp.raise_for_status()
             return await resp.text()
 
-async def _fetch_cpd_event_detail(session, url: str) -> Dict[str, Any]:
+async def _fetch_cpd_event_detail(session, url: str) -> Dict[str, Any] | None:
     """Fetch and parse a single CPD event page using verified logic."""
     if not url.startswith("http"):
         url = f"{CPD_BASE_URL}{url}"
@@ -1280,17 +1320,20 @@ async def _fetch_cpd_event_detail(session, url: str) -> Dict[str, Any]:
         headers = {"User-Agent": "LibraryScraper/1.0 (+https://github.com/)"}
         async with CPD_SEM:
             async with session.get(url, timeout=10, headers=headers) as resp:
-        async with CPD_SEM:
-            async with session.get(url, timeout=10) as resp:
                 resp.raise_for_status()
                 html = await resp.text()
-                # Small delay to be respectful
-                await asyncio.sleep(0.5)
 
-        # Parse HTML using BeautifulSoup
-                soup = _make_soup(html)
-        soup = BeautifulSoup(html, 'lxml')
-        details = {"Description": "Not found", "Time": "Not found", "Date": "Not found", "Location": "Chicago Park District"}
+        # Small delay to be respectful
+        await asyncio.sleep(0.5)
+
+        # Parse HTML using BeautifulSoup (via helper)
+        soup = _make_soup(html)
+        details = {
+            "Description": "Not found",
+            "Time": "Not found",
+            "Date": "Not found",
+            "Location": "Chicago Park District",
+        }
 
         # 1. Extract Title
         title_elem = soup.find('h1', class_='page-header') or soup.find('h1')
@@ -1302,11 +1345,11 @@ async def _fetch_cpd_event_detail(session, url: str) -> Dict[str, Any]:
             label_parent = date_label.parent
             content_container = label_parent.find_next_sibling()
 
-            full_text = ""
-            if content_container:
-                full_text = content_container.get_text(separator=" ", strip=True)
-            else:
-                full_text = label_parent.parent.get_text(separator=" ", strip=True)
+            full_text = (
+                content_container.get_text(separator=" ", strip=True)
+                if content_container
+                else label_parent.parent.get_text(separator=" ", strip=True)
+            )
 
             # Date
             date_match = re.search(r'([A-Z][a-z]{2,8}\s+\d{1,2},?\s+\d{4})', full_text)
@@ -1314,7 +1357,9 @@ async def _fetch_cpd_event_detail(session, url: str) -> Dict[str, Any]:
                 details["Date"] = date_match.group(1)
 
             # Time
-            time_match = re.search(r'(\d{1,2}:\d{2}\s*[AP]M\s*[-–]\s*\d{1,2}:\d{2}\s*[AP]M)', full_text)
+            time_match = re.search(
+                r'(\d{1,2}:\d{2}\s*[AP]M\s*[-–]\s*\d{1,2}:\d{2}\s*[AP]M)', full_text
+            )
             if not time_match:
                 time_match = re.search(r'(\d{1,2}:\d{2}\s*[AP]M)', full_text)
             if time_match:
@@ -1361,6 +1406,7 @@ async def _fetch_cpd_event_detail(session, url: str) -> Dict[str, Any]:
         logger.debug(f"Error parsing CPD detail {url}: {e}")
         return None
 
+# Firecrawl-based parser (still available, but not used by the main CPD crawler)
 async def _fetch_chicago_parks_content(app: AsyncFirecrawl, page: int = 1) -> str:
     """Fetch content from Chicago Park District with pagination support."""
     url = f"{CHICAGO_PARKS_URL}?page={page}"
@@ -1552,84 +1598,34 @@ async def fetch_chicago_parks_events() -> List[Dict[str, Any]]:
     tasks = [_fetch_cpd_event_detail(session, url) for url in event_urls]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    valid_events = []
+    valid_events: List[Dict[str, Any]] = []
+    invalid_count = 0
+    error_count = 0
+
     for res in results:
-        if isinstance(res, dict) and res.get("Date") != "Not found":
-            valid_events.append(res)
-        elif isinstance(res, dict):
-            logger.debug(f"CPD event dropped (missing date): title={res.get('Title')} link={res.get('Link')}")
+        if isinstance(res, dict):
+            if res.get("Date") != "Not found":
+                valid_events.append(res)
+            else:
+                invalid_count += 1
+                logger.debug(
+                    f"CPD event dropped (missing date): title={res.get('Title')} link={res.get('Link')}"
+                )
         elif isinstance(res, Exception):
+            error_count += 1
             logger.debug(f"CPD detail error: {res}")
 
     logger.info(f"Successfully extracted {len(valid_events)} CPD events (direct detail parsing)")
 
-    # Debug insight: how many results were invalid
-    invalid_count = sum(1 for res in results if isinstance(res, dict) and res.get("Date") == "Not found")
-    error_count = sum(1 for res in results if isinstance(res, Exception))
     if invalid_count or error_count or not valid_events:
-        logger.warning(f"CPD scrape diagnostics - valid: {len(valid_events)}, invalid_no_date: {invalid_count}, exceptions: {error_count}")
+        logger.warning(
+            f"CPD scrape diagnostics - valid: {len(valid_events)}, "
+            f"invalid_no_date: {invalid_count}, exceptions: {error_count}"
+        )
 
-
-    # 1. Crawl Listing Pages to find event URLs
-    # Dynamically fetch all pages until no more events found
-    event_urls = set()
-    page = 0
-    max_pages = 30  # Safety limit to prevent infinite loops
-
-    try:
-        while page < max_pages:
-            try:
-                html = await retry_with_backoff(_fetch_cpd_listing_page, session, page)
-                soup = BeautifulSoup(html, 'lxml')
-
-                # Find links that look like event pages
-                # CPD usually uses /events/event-slug
-                links = soup.find_all('a', href=re.compile(r'^/events/[^/]+$'))
-                page_event_count = 0
-
-                for link in links:
-                    href = link.get('href')
-                    # Filter out non-events and short/empty links
-                    if (href and
-                        len(href) > 8 and
-                        href != '/events/map' and
-                        href not in event_urls):
-                        event_urls.add(href)
-                        page_event_count += 1
-
-                logger.info(f"Page {page}: Found {page_event_count} new event links (total: {len(event_urls)})")
-
-                # Stop if no new events found on this page
-                if page_event_count == 0:
-                    logger.info(f"No new events found on page {page}, stopping crawl")
-                    break
-
-                page += 1
-
-                # Add delay between listing pages to be respectful
-                if page < max_pages:
-                    await asyncio.sleep(2)
-
-            except Exception as e:
-                logger.warning(f"Failed to fetch CPD listing page {page}: {e}")
-                break
-    except Exception as e:
-        logger.error(f"CPD crawler failed: {e}")
-        return []
-
-    logger.info(f"Found {len(event_urls)} unique CPD event links. Fetching details...")
-
-    # 2. Fetch Details Concurrently
-    tasks = [_fetch_cpd_event_detail(session, url) for url in event_urls]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    valid_events = []
-    for res in results:
-        if isinstance(res, dict) and res.get("Date") != "Not found":
-            valid_events.append(res)
-
-    logger.info(f"Successfully extracted {len(valid_events)} CPD events")
     return valid_events
+
+# ------------- FPDCC (Forest Preserves) -------------
 
 async def _fetch_fpdcc_page(session, page: int, start_date: str, end_date: str) -> Dict[str, Any]:
     """Fetch a single page of Forest Preserves events."""
@@ -1928,6 +1924,7 @@ def generate_ics_file(all_events: List[Dict[str, Any]], filename: str):
         logger.error(f"ICS file generation failed: {e}", exc_info=True)
 
 # --- MAIN EXECUTION ---
+
 def compute_date_window(cli_args=None) -> tuple[str, int]:
     """Compute START_DATE (YYYY-MM-DD) and DAYS_TO_FETCH from CLI/env with sane defaults."""
     parser = argparse.ArgumentParser(add_help=False)
@@ -2015,7 +2012,8 @@ async def main():
         for event in all_events:
             identifier = (event.get('Library'), event.get('Title'), event.get('Date'), event.get('Time'))
             if identifier not in seen:
-                unique_events.append(event); seen.add(identifier)
+                unique_events.append(event)
+                seen.add(identifier)
         logger.info(f"Total events after de-duplication: {len(unique_events)}")
         all_events = unique_events
 
@@ -2126,4 +2124,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
