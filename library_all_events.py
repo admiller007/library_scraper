@@ -1766,7 +1766,7 @@ def compute_date_window(cli_args=None) -> tuple[str, int]:
             logger.warning(f"Invalid START_OFFSET_DAYS '{env_offset}', using 0")
             offset = 0
         start_dt = datetime.now().date() + timedelta(days=offset)
- w       start_date_str = start_dt.strftime("%Y-%m-%d")
+        start_date_str = start_dt.strftime("%Y-%m-%d")
 
     return start_date_str, days
 
