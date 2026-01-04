@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Library Event Scraper - Architecture</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #1a202c;
+            color: #e2e8f0;
+            padding: 40px 20px;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            font-size: 2rem;
+            margin-bottom: 30px;
+            font-weight: 600;
+        }
+
+        h2 {
+            font-size: 1.5rem;
+            margin: 30px 0 20px 0;
+            font-weight: 500;
+        }
+
+        .pipeline-box {
+            border: 2px solid #4a5568;
+            padding: 20px;
+            margin-bottom: 30px;
+            background: #2d3748;
+        }
+
+        .pipeline-title {
+            text-align: center;
+            font-size: 1.1rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            font-family: 'Courier New', monospace;
+        }
+
+        .flow-step {
+            margin: 30px 0;
+            position: relative;
+        }
+
+        .step-box {
+            border: 2px solid #4a5568;
+            padding: 20px;
+            background: #2d3748;
+            display: inline-block;
+            min-width: 250px;
+        }
+
+        .step-title {
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .step-description {
+            color: #cbd5e0;
+            font-size: 0.95rem;
+        }
+
+        .arrow {
+            text-align: center;
+            margin: 15px 0;
+            font-size: 1.5rem;
+            color: #718096;
+        }
+
+        .arrow-label {
+            font-size: 0.9rem;
+            color: #a0aec0;
+            font-style: italic;
+            margin: 5px 0;
+        }
+
+        .multi-branch {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .branch-box {
+            border: 2px solid #4a5568;
+            padding: 15px;
+            background: #374151;
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .branch-title {
+            font-weight: 600;
+            font-size: 0.9rem;
+            margin-bottom: 5px;
+        }
+
+        .branch-desc {
+            font-size: 0.85rem;
+            color: #cbd5e0;
+        }
+
+        .highlight {
+            color: #63b3ed;
+        }
+
+        .outputs {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            margin: 20px 0;
+        }
+
+        .output-item {
+            border: 2px solid #48bb78;
+            padding: 12px 18px;
+            background: #2d3748;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+        }
+
+        @media (max-width: 768px) {
+            .multi-branch {
+                flex-direction: column;
+            }
+
+            .branch-box {
+                min-width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Library Event Scraper Pipeline</h1>
+
+        <h2>Overview</h2>
+
+        <div class="pipeline-box">
+            <div class="pipeline-title">LIBRARY EVENT SCRAPING & AGGREGATION PIPELINE</div>
+        </div>
+
+        <div class="flow-step">
+            <div style="text-align: left; margin-bottom: 10px;">
+                User Triggers Scrape (CLI or Web GUI)
+            </div>
+        </div>
+
+        <div class="arrow">↓</div>
+
+        <div class="flow-step">
+            <div class="step-box">
+                <div class="step-title">library_all_events.py main()</div>
+                <div class="step-description">
+                    Parse CLI args & environment vars<br>
+                    Compute date range and age filters
+                </div>
+            </div>
+        </div>
+
+        <div class="arrow">↓</div>
+        <div class="arrow-label">Launch Async Tasks</div>
+
+        <div class="flow-step">
+            <div class="step-box">
+                <div class="step-title">Concurrent Fetchers (asyncio.gather)</div>
+                <div class="step-description">
+                    Run 8+ library scrapers in parallel<br>
+                    Each returns List[Dict] of events
+                </div>
+            </div>
+        </div>
+
+        <div class="arrow">↓</div>
+
+        <div class="multi-branch">
+            <div class="branch-box">
+                <div class="branch-title">Lincolnwood</div>
+                <div class="branch-desc">Firecrawl API<br>Markdown parsing</div>
+            </div>
+            <div class="branch-box">
+                <div class="branch-title">Morton Grove</div>
+                <div class="branch-desc">Firecrawl API<br>Markdown parsing</div>
+            </div>
+            <div class="branch-box">
+                <div class="branch-title">Skokie</div>
+                <div class="branch-desc">Firecrawl API<br>Markdown parsing</div>
+            </div>
+        </div>
+
+        <div class="multi-branch">
+            <div class="branch-box">
+                <div class="branch-title">Bibliocommons</div>
+                <div class="branch-desc">Evanston, CPL<br>API pagination</div>
+            </div>
+            <div class="branch-box">
+                <div class="branch-title">LibNet</div>
+                <div class="branch-desc">Wilmette, Niles<br>JSON API + filtering</div>
+            </div>
+            <div class="branch-box">
+                <div class="branch-title">Chicago Parks</div>
+                <div class="branch-desc">BeautifulSoup<br>HTML parsing</div>
+            </div>
+        </div>
+
+        <div class="arrow">↓</div>
+        <div class="arrow-label">Aggregate Results</div>
+
+        <div class="flow-step">
+            <div class="step-box">
+                <div class="step-title">Aggregate & Deduplicate</div>
+                <div class="step-description">
+                    Combine all events into single list<br>
+                    Remove duplicates by (Library, Title, Date, Time)<br>
+                    Apply text cleaning with clean_text()
+                </div>
+            </div>
+        </div>
+
+        <div class="arrow">↓</div>
+        <div class="arrow-label">Process</div>
+
+        <div class="flow-step">
+            <div class="step-box">
+                <div class="step-title">Parse & Sort Events</div>
+                <div class="step-description">
+                    Parse date strings (multiple formats)<br>
+                    Sort by date, then by time<br>
+                    Convert to pandas DataFrame
+                </div>
+            </div>
+        </div>
+
+        <div class="arrow">↓</div>
+        <div class="arrow-label">Generate Outputs</div>
+
+        <div class="outputs">
+            <div class="output-item">📄 CSV Export</div>
+            <div class="output-item">📕 PDF Report</div>
+            <div class="output-item">📅 ICS Calendar</div>
+        </div>
+
+        <div class="arrow">↓</div>
+        <div class="arrow-label">Save to DATA_DIR</div>
+
+        <div class="flow-step">
+            <div class="step-box">
+                <div class="step-title">File Storage</div>
+                <div class="step-description">
+                    all_library_events_YYYYMMDD.csv<br>
+                    all_library_events_YYYYMMDD.pdf<br>
+                    all_library_events_YYYYMMDD.ics<br>
+                    Logged to library_events.log
+                </div>
+            </div>
+        </div>
+
+        <div class="arrow">↓</div>
+        <div class="arrow-label">Web Access</div>
+
+        <div class="flow-step">
+            <div class="step-box">
+                <div class="step-title">library_web_gui.py</div>
+                <div class="step-description">
+                    Load latest CSV from storage<br>
+                    Serve Flask web interface<br>
+                    Provide filtering & export APIs
+                </div>
+            </div>
+        </div>
+
+        <div class="arrow">↓</div>
+
+        <div class="multi-branch">
+            <div class="branch-box">
+                <div class="branch-title">GET /api/events</div>
+                <div class="branch-desc">Filter by library, date, search terms</div>
+            </div>
+            <div class="branch-box">
+                <div class="branch-title">GET /api/export/*</div>
+                <div class="branch-desc">Download ICS or PDF files</div>
+            </div>
+            <div class="branch-box">
+                <div class="branch-title">POST /api/scrape</div>
+                <div class="branch-desc">Trigger new scrape manually</div>
+            </div>
+        </div>
+
+        <div class="arrow">↓</div>
+        <div class="arrow-label">Real-time Updates</div>
+
+        <div class="flow-step">
+            <div class="step-box">
+                <div class="step-title">User Interface</div>
+                <div class="step-description">
+                    Dynamic filtering without page reload<br>
+                    Advanced search (fuzzy, exact, any, all)<br>
+                    Export to calendar or PDF<br>
+                    Responsive design for mobile/desktop
+                </div>
+            </div>
+        </div>
+
+        <div style="margin-top: 40px; padding: 20px; border: 2px solid #4a5568; background: #2d3748;">
+            <h3 style="margin-bottom: 15px;">Key Features</h3>
+            <ul style="margin-left: 20px; line-height: 2;">
+                <li><span class="highlight">Concurrent Scraping</span> - Async operations reduce total time to ~2-3 minutes</li>
+                <li><span class="highlight">Error Resilience</span> - Individual failures don't crash entire pipeline</li>
+                <li><span class="highlight">Retry Logic</span> - Exponential backoff for network/rate limit errors</li>
+                <li><span class="highlight">Data Quality</span> - Text cleaning, deduplication, format validation</li>
+                <li><span class="highlight">Multiple Outputs</span> - CSV, PDF, ICS formats for different use cases</li>
+                <li><span class="highlight">Web Interface</span> - Real-time filtering and search capabilities</li>
+                <li><span class="highlight">Automated Updates</span> - Daily cron job on Render.com (6 AM)</li>
+            </ul>
+        </div>
+
+        <div style="margin-top: 20px; padding: 15px; background: #2d3748; border-left: 4px solid #63b3ed;">
+            <strong>Note:</strong> For detailed function references and code locations, see
+            <a href="../CLAUDE.md" style="color: #63b3ed; text-decoration: none;">CLAUDE.md</a>
+        </div>
+    </div>
+</body>
+</html>

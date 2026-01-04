@@ -140,11 +140,13 @@ library_scraper/
 ├── library.py              # Legacy scraper (deprecated)
 ├── skokie_test.py          # Scraper testing utility
 ├── templates/
-│   └── index.html          # Web interface template
+│   ├── index.html          # Web interface template
+│   └── architecture.html   # Architecture visualization
 ├── requirements.txt        # Python dependencies
 ├── .env.example            # Environment configuration template
 ├── Procfile                # Heroku deployment config
 ├── render.yaml             # Render.com deployment config
+├── ARCHITECTURE.md         # System architecture documentation
 └── CLAUDE.md               # AI assistant documentation
 ```
 
@@ -201,6 +203,14 @@ gunicorn library_web_gui:app --bind 0.0.0.0:8000 --workers 2 --timeout 180
    - Sorted by date and time
 
 3. **Output**: Events are exported in multiple formats for different use cases
+
+**For detailed architecture**: See [ARCHITECTURE.md](ARCHITECTURE.md) for comprehensive documentation including:
+- Complete data flow pipeline diagrams
+- Component architecture details
+- Event schema specifications
+- Deployment architecture
+- Performance characteristics
+- Interactive visual diagram at `templates/architecture.html`
 
 ## API Rate Limiting
 
@@ -270,10 +280,16 @@ python library_all_events.py --days 3
 
 This project is open source. Please check the repository for license details.
 
+## Documentation
+
+- **[ARCHITECTURE.md](ARCHITECTURE.md)**: System architecture, data flow diagrams, and component documentation
+- **[CLAUDE.md](CLAUDE.md)**: Comprehensive technical documentation for developers and AI assistants
+- **[templates/architecture.html](templates/architecture.html)**: Interactive visual architecture diagram
+
 ## Support
 
 - **Issues**: Report bugs and request features via [GitHub Issues](https://github.com/admiller007/library_scraper/issues)
-- **Documentation**: See `CLAUDE.md` for comprehensive technical documentation
+- **Documentation**: See links above for detailed technical documentation
 
 ## Acknowledgments
 
