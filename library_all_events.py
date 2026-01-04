@@ -1988,6 +1988,8 @@ async def main():
             ("Evanston", lambda: fetch_bibliocommons_events("Evanston", EVANSTON_BASE_URL)),
             ("CPL Edgebrook", lambda: fetch_bibliocommons_events("CPL Edgebrook", CPL_BASE_URL, "locations=27")),
             ("CPL Budlong Woods", lambda: fetch_bibliocommons_events("CPL Budlong Woods", CPL_BASE_URL, "locations=16")),
+            ("CPL Northtown", lambda: fetch_bibliocommons_events("CPL Northtown", CPL_BASE_URL, "locations=56")),
+            ("CPL Rogers Park", lambda: fetch_bibliocommons_events("CPL Rogers Park", CPL_BASE_URL, "locations=61")),
             ("Wilmette", lambda: fetch_libnet_events("Wilmette", "wilmette.libnet.info")),
             ("Skokie Library", lambda: fetch_skokie_events()),
             ("Skokie Parks", lambda: fetch_skokie_parks_events()),
