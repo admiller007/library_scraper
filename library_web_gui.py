@@ -82,7 +82,7 @@ def parse_time_to_sortable(time_str: str) -> datetime.time:
 
 
 def filter_events(
-    library_filter='All',
+    library_filters=None,
     type_filters=None,
     search_term='',
     start_date='',
@@ -92,6 +92,7 @@ def filter_events(
     search_mode='any'
 ):
     """Apply shared filtering logic used by both JSON API and ICS export."""
+    library_filters = library_filters or []
     type_filters = type_filters or []
     filtered_events = events_data.copy()
     search_mode = (search_mode or 'any').lower()
@@ -100,8 +101,8 @@ def filter_events(
         search_mode = 'any'
 
     # Apply library filter
-    if library_filter and library_filter != 'All':
-        filtered_events = [e for e in filtered_events if e.get('Library', '') == library_filter]
+    if library_filters:
+        filtered_events = [e for e in filtered_events if e.get('Library', '') in library_filters]
 
     # Apply type (age group) filters
     if type_filters:
@@ -477,7 +478,8 @@ def health():
 @app.route('/api/events')
 def get_events():
     """API endpoint to get filtered events"""
-    library_filter = request.args.get('library', 'All')
+    # Support multiple `library` params, e.g., ?library=A&library=B
+    library_filters = [l.strip() for l in request.args.getlist('library') if (l or '').strip()]
     # Support multiple `type` params, e.g., ?type=A&type=B
     type_filters = [t.strip() for t in request.args.getlist('type') if (t or '').strip()]
     search_term = request.args.get('search', '').lower().strip()
@@ -488,7 +490,7 @@ def get_events():
     search_mode = request.args.get('search_mode', 'any').lower().strip() or 'any'
 
     filtered_events = filter_events(
-        library_filter=library_filter,
+        library_filters=library_filters,
         type_filters=type_filters,
         search_term=search_term,
         start_date=start_date,
@@ -507,7 +509,7 @@ def get_events():
 @app.route('/api/ics')
 def download_ics():
     """Download an ICS file for all or filtered events using the same filters as /api/events."""
-    library_filter = request.args.get('library', 'All')
+    library_filters = [l.strip() for l in request.args.getlist('library') if (l or '').strip()]
     type_filters = [t.strip() for t in request.args.getlist('type') if (t or '').strip()]
     search_term = request.args.get('search', '').lower().strip()
     date_filter = request.args.get('date', '').strip()
@@ -517,7 +519,7 @@ def download_ics():
     search_mode = request.args.get('search_mode', 'any').lower().strip() or 'any'
 
     filtered_events = filter_events(
-        library_filter=library_filter,
+        library_filters=library_filters,
         type_filters=type_filters,
         search_term=search_term,
         start_date=start_date,
@@ -550,7 +552,7 @@ def download_ics():
 @app.route('/api/pdf')
 def download_pdf():
     """Download a PDF organized by day, then library, then time, honoring any filters."""
-    library_filter = request.args.get('library', 'All')
+    library_filters = [l.strip() for l in request.args.getlist('library') if (l or '').strip()]
     type_filters = [t.strip() for t in request.args.getlist('type') if (t or '').strip()]
     search_term = request.args.get('search', '').lower().strip()
     date_filter = request.args.get('date', '').strip()
@@ -560,7 +562,7 @@ def download_pdf():
     search_mode = request.args.get('search_mode', 'any').lower().strip() or 'any'
 
     filtered_events = filter_events(
-        library_filter=library_filter,
+        library_filters=library_filters,
         type_filters=type_filters,
         search_term=search_term,
         start_date=start_date,
