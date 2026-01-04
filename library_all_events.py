@@ -50,7 +50,12 @@ for _h in (_stream, _file):
 logger = logging.getLogger(__name__)
 
 # --- CONFIGURATION ---
-FIRECRAWL_API_KEY = os.getenv('FIRECRAWL_API_KEY', 'fc-fe1ba845d9c748c1871061a8366dcd43')
+FIRECRAWL_API_KEY = os.getenv('FIRECRAWL_API_KEY')
+if not FIRECRAWL_API_KEY:
+    raise ValueError(
+        "FIRECRAWL_API_KEY environment variable is required. "
+        "Please set it in your .env file or environment."
+    )
 TIMEZONE = os.getenv('TIMEZONE', 'America/Chicago')
 
 # Date window configuration (computed at runtime in main())
