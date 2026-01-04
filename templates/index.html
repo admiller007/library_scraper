@@ -375,12 +375,16 @@
             updateStatus('Filtering events...');
 
             try {
-                const libraryParams = librarySelected.map(l => `&library=${encodeURIComponent(l)}`).join('');
-                const typeParams = typeSelected.map(t => `&type=${encodeURIComponent(t)}`).join('');
-                const fieldParams = searchFields.length ? `&search_fields=${encodeURIComponent(searchFields.join(','))}` : '';
-                const modeParam = searchMode ? `&search_mode=${encodeURIComponent(searchMode)}` : '';
-                const rangeParams = (startIso ? `&start=${encodeURIComponent(startIso)}` : '') + (endIso ? `&end=${encodeURIComponent(endIso)}` : '');
-                const url = `/api/events?${libraryParams}${typeParams}&search=${encodeURIComponent(search)}${fieldParams}${modeParam}${rangeParams}`;
+                const params = new URLSearchParams();
+                librarySelected.forEach(l => params.append('library', l));
+                typeSelected.forEach(t => params.append('type', t));
+                if (search) params.append('search', search);
+                if (searchMode) params.append('search_mode', searchMode);
+                if (searchFields.length) params.append('search_fields', searchFields.join(','));
+                if (startIso) params.append('start', startIso);
+                if (endIso) params.append('end', endIso);
+
+                const url = `/api/events?${params.toString()}`;
                 const response = await fetch(url);
                 const data = await response.json();
                 filteredEvents = data.events;

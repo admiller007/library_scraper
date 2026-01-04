@@ -16,6 +16,9 @@ services:
       name: data
       mountPath: /opt/render/project/src/data
       sizeGB: 1
+    # PR Preview Configuration
+    previewsEnabled: true
+    previewsExpireAfterDays: 7
 
 cronJobs:
   - name: refresh-events-daily
