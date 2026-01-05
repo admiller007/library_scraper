@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: library-events
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: DATA_DIR=/opt/render/project/src/data python library_all_events.py && gunicorn library_web_gui:app --bind 0.0.0.0:$PORT --workers 2 --timeout 180
+    envVars:
+      - key: FIRECRAWL_API_KEY
+        sync: false
+      - key: TIMEZONE
+        value: America/Chicago
+      - key: DATA_DIR
+        value: /opt/render/project/src/data
+    disk:
+      name: data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
+
+cronJobs:
+  - name: refresh-events-daily
+    env: python
+    schedule: "0 6 * * *"
+    command: DATA_DIR=/opt/render/project/src/data python library_all_events.py

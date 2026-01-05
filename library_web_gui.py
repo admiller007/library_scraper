@@ -5,15 +5,18 @@ A simple Flask-based web interface to view, filter, and export library events.
 """
 
 from flask import Flask, render_template, request, jsonify, send_file
-import pandas as pd
 import os
 import json
 import re
 import hashlib
+import csv
 from io import BytesIO
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
+from typing import Optional
 from zoneinfo import ZoneInfo
 from difflib import SequenceMatcher
+from functools import lru_cache
+from pathlib import Path
 from ics import Calendar, Event
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
@@ -24,7 +27,15 @@ from html import escape
 import webbrowser
 import threading
 import time
-from pathlib import Path
+import math
+import requests
+
+# Import AI service (optional)
+try:
+    from ai_service import enhance_events_batch, get_summarizer
+    AI_AVAILABLE = True
+except ImportError:
+    AI_AVAILABLE = False
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.getenv("DATA_DIR", BASE_DIR)).resolve()
@@ -33,7 +44,29 @@ TZINFO = ZoneInfo(TIMEZONE)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 PROGRESS_FILE = DATA_DIR / "scrape_progress.json"
 
+# Geocoding cache setup
+GEO_CACHE_FILE = DATA_DIR / "geo_cache.json"
+geo_cache = {}
+if GEO_CACHE_FILE.exists():
+    try:
+        with open(GEO_CACHE_FILE, 'r') as f:
+            geo_cache = json.load(f)
+        print(f"📍 Loaded {len(geo_cache)} cached geocoding results")
+    except Exception as e:
+        print(f"⚠️ Could not load geo cache: {e}")
+        geo_cache = {}
+
+def save_geo_cache():
+    """Helper to save geocoding cache to disk"""
+    try:
+        with open(GEO_CACHE_FILE, 'w') as f:
+            json.dump(geo_cache, f, indent=2)
+    except Exception as e:
+        print(f"⚠️ Could not save geo cache: {e}")
+
 app = Flask(__name__, template_folder=str(BASE_DIR / "templates"))
+app.config["TEMPLATES_AUTO_RELOAD"] = True
+app.jinja_env.auto_reload = True
 
 # Global variable to store events data
 events_data = []
@@ -46,6 +79,223 @@ def clean_text(value: str) -> str:
     if not isinstance(value, str):
         return ""
     return " ".join(value.replace("\u200b", " ").split())
+
+
+def geocode_address(address: str) -> Optional[tuple[float, float]]:
+    """Geocode an address using cache, hardcoded mapping, then Nominatim API fallback."""
+    if not address or not address.strip():
+        return None
+
+    address = address.strip()
+    print(f"🌍 Geocoding address: '{address}'")  # Debug
+
+    # Check cache first for any previous successful geocoding
+    if address in geo_cache:
+        print(f"⚡ Using cached coordinates for: '{address}'")
+        return tuple(geo_cache[address])
+
+    # First try hardcoded ZIP code mapping for Chicago area (fast and reliable)
+    zip_coords = {
+        "60645": (41.9700, -87.6800),  # North Chicago (general area, not specific library)
+        "60646": (41.9917, -87.7581),  # North Chicago (near CPL Edgebrook)
+        "60016": (42.0334, -87.8834),  # Des Plaines
+        "60201": (42.0450, -87.6877),  # Evanston
+        "60305": (41.8950, -87.8031),  # River Forest
+        "60022": (42.1372, -87.7581),  # Glencoe
+        "60169": (42.0631, -88.0834),  # Hoffman Estates
+        "60712": (42.0075, -87.7220),  # Lincolnwood
+        "60053": (42.0406, -87.7834),  # Morton Grove
+        "60714": (42.0281, -87.8009),  # Niles
+        "60068": (42.0111, -87.8406),  # Park Ridge
+        "60077": (42.0406, -87.7334),  # Skokie
+        "60091": (42.0722, -87.7220),  # Wilmette
+        "60659": (41.9740, -87.6700),  # North Chicago (near Budlong Woods area)
+        "60640": (41.9675, -87.6947),  # Uptown Chicago
+        "60613": (41.9536, -87.6547),  # Lakeview Chicago
+        "60614": (41.9297, -87.6436),  # Lincoln Park Chicago
+        "60033": (42.0522, -88.0392),  # Glendale Heights
+        "60005": (41.9581, -87.9331),  # Arlington Heights
+        "60007": (42.0042, -87.9373),  # Elk Grove Village
+        "60018": (42.0403, -87.9545),  # Des Plaines
+        "60025": (42.0631, -87.8006),  # Glenview
+        "60056": (42.1231, -87.7370),  # Mount Prospect
+        "60062": (42.1478, -87.9215),  # Northbrook
+        "60076": (42.0406, -87.7545),  # Skokie
+        "60089": (42.2331, -87.8609),  # Buffalo Grove
+        "60090": (42.2189, -87.8845),  # Wheeling
+        "60004": (42.0039, -87.9006),  # Arlington Heights
+        "60008": (42.0331, -87.9698),  # Rolling Meadows
+    }
+
+    # Check if it's a known ZIP code
+    coords = zip_coords.get(address)
+    if coords:
+        print(f"✅ Found hardcoded ZIP coordinates: {coords}")  # Debug
+        # Cache the result for faster future lookups
+        geo_cache[address] = coords
+        save_geo_cache()
+        return coords
+
+    # Try simple pattern matching for common Chicago addresses
+    chicago_patterns = {
+        'downtown chicago': (41.8781, -87.6298),
+        'loop chicago': (41.8781, -87.6298),
+        'north side chicago': (41.9500, -87.6500),
+        'south side chicago': (41.8000, -87.6298),
+        'west side chicago': (41.8781, -87.7000),
+        'chicago': (41.8781, -87.6298),  # Default Chicago center
+    }
+
+    address_lower = address.lower()
+    for pattern, coords in chicago_patterns.items():
+        if pattern in address_lower:
+            print(f"✅ Found pattern match for '{pattern}': {coords}")
+            # Cache the result for faster future lookups
+            geo_cache[address] = coords
+            save_geo_cache()
+            return coords
+
+    # Fallback to Nominatim API for full addresses with improved implementation
+    try:
+        print(f"🌐 Trying Nominatim API for: {address}")  # Debug
+
+        # Proper headers - NO example.com domains (they are blocked)
+        headers = {
+            'User-Agent': 'ChicagoLibraryEventMap/1.0 (local_dev_project; dev_chicago_libs_2024)',
+            'Accept': 'application/json',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+            'Referer': 'http://localhost:8888/'
+        }
+
+        url = "https://nominatim.openstreetmap.org/search"
+        params = {
+            'q': address,
+            'format': 'json',
+            'limit': 1,
+            'countrycodes': 'us',  # Limit to US addresses
+            'addressdetails': 1,
+            'extratags': 0,
+            'namedetails': 0
+            # Removed email parameter - using unique User-Agent instead
+        }
+
+        # Log the exact request for debugging
+        print(f"📝 Request URL: {url}")
+        print(f"📝 Request params: {params}")
+        print(f"📝 Request headers: {headers}")
+
+        # Add delay to respect rate limiting (1 request per second max)
+        import time
+        time.sleep(1.1)  # Slightly more than 1 second
+
+        print(f"🔄 Making HTTP request...")
+        response = requests.get(url, params=params, headers=headers, timeout=30)
+
+        # Log response details for debugging
+        print(f"📊 Response status: {response.status_code}")
+        print(f"📊 Response headers: {dict(response.headers)}")
+
+        # Check for specific error responses
+        if response.status_code == 403:
+            print(f"🚫 HTTP 403 Forbidden - Access denied by Nominatim")
+            print(f"🚫 This might be due to:")
+            print(f"   - Too many requests (rate limiting)")
+            print(f"   - Missing or invalid User-Agent")
+            print(f"   - IP-based blocking")
+            print(f"   - Need for email parameter")
+            return None
+        elif response.status_code == 429:
+            print(f"🚫 HTTP 429 Too Many Requests - Rate limited")
+            return None
+
+        response.raise_for_status()
+
+        try:
+            data = response.json()
+            print(f"🔍 Nominatim response: {len(data) if data else 0} results")  # Debug
+
+            if data and len(data) > 0:
+                result = data[0]
+                print(f"📍 Full result: {result}")  # Debug full response
+
+                lat = float(result['lat'])
+                lon = float(result['lon'])
+                coords = (lat, lon)
+                print(f"✅ Found Nominatim coordinates: {coords}")  # Debug
+
+                # Cache the successful result
+                geo_cache[address] = coords
+                save_geo_cache()
+                return coords
+            else:
+                print(f"🔍 Nominatim returned empty results for: {address}")
+                return None
+
+        except (ValueError, KeyError) as e:
+            print(f"⚠️ Failed to parse Nominatim response: {e}")
+            print(f"📄 Raw response: {response.text[:500]}...")
+            return None
+
+    except requests.exceptions.RequestException as e:
+        print(f"⚠️ Nominatim API request failed for '{address}': {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            print(f"📄 Error response status: {e.response.status_code}")
+            print(f"📄 Error response text: {e.response.text[:200]}...")
+    except Exception as e:
+        print(f"⚠️ Unexpected error during Nominatim geocoding: {e}")
+
+    print(f"❌ No coordinates found for: {address}")  # Debug
+    print(f"💡 Tip: Try using a ZIP code instead (like 60601) for better results")  # Debug
+    return None
+
+
+def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calculate the great circle distance between two points on the earth in miles.
+    Uses the haversine formula."""
+    # Convert to radians
+    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+
+    # Haversine formula
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+    c = 2 * math.asin(math.sqrt(a))
+
+    # Radius of earth in miles
+    r = 3956
+    return c * r
+
+
+def get_library_coordinates(library_name: str, location: str) -> Optional[tuple[float, float]]:
+    """Get coordinates for a library location using hardcoded mapping."""
+    # Hardcoded library coordinates mapping
+    library_coords = {
+        "CPL Budlong Woods": (41.9748, -87.6677),  # 5630 N Lincoln Avenue, Chicago, IL 60659
+        "CPL Edgebrook": (41.9917, -87.7581),      # 5331 W Devon Avenue, Chicago, IL 60646
+        "Des Plaines": (42.0334, -87.8834),        # 1501 Ellinwood Street, Des Plaines, IL 60016
+        "Evanston": (42.0450, -87.6877),           # 1703 Orrington Avenue, Evanston, IL 60201
+        "Forest Preserves of Cook County": (41.8950, -87.8031), # 536 N Harlem Avenue, River Forest, IL 60305
+        "Glencoe": (42.1372, -87.7581),            # 320 Park Avenue, Glencoe, IL 60022
+        "Hoffman Estates": (42.0631, -88.0834),    # 1550 Hassell Road, Hoffman Estates, IL 60169
+        "Lincolnwood": (42.0075, -87.7220),        # 4000 W Pratt Avenue, Lincolnwood, IL 60712
+        "Morton Grove": (42.0406, -87.7834),       # 6140 Lincoln Avenue, Morton Grove, IL 60053
+        "Niles": (42.0281, -87.8009),              # 6960 W Oakton Street, Niles, IL 60714
+        "Park Ridge": (42.0111, -87.8406),         # 20 S Prospect Avenue, Park Ridge, IL 60068
+        "Skokie": (42.0406, -87.7334),             # 5215 Oakton Street, Skokie, IL 60077
+        "Skokie Park District": (42.0406, -87.7220), # 9300 Weber Park Place, Skokie, IL 60077
+        "Wilmette": (42.0722, -87.7220),           # 1242 Wilmette Avenue, Wilmette, IL 60091
+    }
+
+    print(f"🏛️ Getting coordinates for library: '{library_name}'")  # Debug
+    coords = library_coords.get(library_name)
+    if coords:
+        print(f"✅ Found hardcoded coordinates: {coords}")  # Debug
+        return coords
+    else:
+        print(f"❌ No coordinates found for library: {library_name}")  # Debug
+        return None
 
 
 def parse_event_date(dstr: str):
@@ -82,49 +332,61 @@ def parse_time_to_sortable(time_str: str) -> datetime.time:
 
 
 def filter_events(
-    library_filter='All',
+    library_filters=None,
     type_filters=None,
     search_term='',
     start_date='',
     end_date='',
     date_filter='',
     search_fields=None,
-    search_mode='any'
+    search_mode='any',
+    user_address='',
+    max_distance=None
 ):
-    """Apply shared filtering logic used by both JSON API and ICS export."""
+    """Apply shared filtering logic using optimized single-pass approach."""
+    # Prepare filter parameters
+    library_filters = [lf for lf in (library_filters or []) if (lf or '').strip() and lf != 'All']
     type_filters = type_filters or []
-    filtered_events = events_data.copy()
     search_mode = (search_mode or 'any').lower()
-    allowed_modes = {'any', 'all', 'exact', 'fuzzy'}
-    if search_mode not in allowed_modes:
+    if search_mode not in {'any', 'all', 'exact', 'fuzzy'}:
         search_mode = 'any'
 
-    # Apply library filter
-    if library_filter and library_filter != 'All':
-        filtered_events = [e for e in filtered_events if e.get('Library', '') == library_filter]
+    # Pre-compute filter parameters for efficiency
+    selected_libs = set(library_filters) if library_filters else None
+    selected_types = set(type_filters) if type_filters else None
 
-    # Apply type (age group) filters
-    if type_filters:
-        selected = set(type_filters)
+    # Parse date filters once
+    start_date_obj = None
+    end_date_obj = None
+    target_date = None
 
-        def get_event_types(ev):
-            raw = (ev.get('Age Group', '') or '')
-            parts = [p.strip() for p in str(raw).split(',') if p.strip()]
-            return set(parts) if parts else {raw} if raw else set()
+    if start_date or end_date:
+        try:
+            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else None
+        except ValueError:
+            pass
+        try:
+            end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else None
+        except ValueError:
+            pass
+    elif date_filter:
+        try:
+            target_date = datetime.strptime(date_filter, "%Y-%m-%d").date()
+        except ValueError:
+            pass
 
-        filtered_events = [e for e in filtered_events if get_event_types(e) & selected]
+    # Pre-compute search parameters
+    search_tokens = []
+    search_fields_list = []
+    fuzzy_threshold = 0.65
 
-    # Apply search filter with configurable fields and modes
     if search_term:
         raw = search_term.lower().strip()
-        fuzzy_threshold = 0.65
-
         # Support quoted phrases or space-separated tokens
-        tokens = []
         for m in re.finditer(r'"([^"]+)"|(\S+)', raw):
             token = (m.group(1) or m.group(2) or '').strip()
             if token:
-                tokens.append(token)
+                search_tokens.append(token)
 
         field_alias = {
             'title': 'Title',
@@ -135,73 +397,115 @@ def filter_events(
             'type': 'Age Group',
             'library': 'Library'
         }
-        selected_fields = []
         for sf in search_fields or []:
             key = field_alias.get(sf.lower())
             if key:
-                selected_fields.append(key)
-        if not selected_fields:
-            selected_fields = ['Title', 'Description', 'Location']
+                search_fields_list.append(key)
+        if not search_fields_list:
+            search_fields_list = ['Title', 'Description', 'Location']
 
-        def matches(ev):
-            values_list = [str(ev.get(f, '') or '').lower() for f in selected_fields]
-            combined = " ".join(values_list)
+    # Geocoding setup
+    user_coords = None
+    if user_address:
+        user_coords = geocode_address(user_address)
 
-            if not raw:
+    # Helper functions for single-pass filtering
+    def get_event_types(ev):
+        raw = (ev.get('Age Group', '') or '')
+        parts = [p.strip() for p in str(raw).split(',') if p.strip()]
+        return set(parts) if parts else {raw} if raw else set()
+
+    def matches_search(ev):
+        if not search_term:
+            return True
+
+        values_list = [str(ev.get(f, '') or '').lower() for f in search_fields_list]
+        combined = " ".join(values_list)
+        raw = search_term.lower().strip()
+
+        if not raw:
+            return True
+
+        if search_mode == 'exact':
+            return raw in combined
+
+        if search_mode == 'fuzzy':
+            if not any(values_list):
+                return False
+            score_fn = lambda needle: max((SequenceMatcher(None, needle, val).ratio() for val in values_list if val), default=0)
+            if score_fn(raw) >= fuzzy_threshold:
                 return True
+            return any(score_fn(tok) >= fuzzy_threshold for tok in search_tokens)
 
-            if search_mode == 'exact':
-                return raw in combined
+        if raw in combined:
+            return True
+        if not search_tokens:
+            return True
+        if search_mode == 'all':
+            return all(tok in combined for tok in search_tokens)
+        return any(tok in combined for tok in search_tokens)
 
-            if search_mode == 'fuzzy':
-                if not any(values_list):
-                    return False
+    def matches_date(ev):
+        if target_date:
+            ev_date = parse_event_date(ev.get('Date') or '')
+            return ev_date == target_date
 
-                def score(needle: str) -> float:
-                    return max(SequenceMatcher(None, needle, val).ratio() for val in values_list if val)
+        if start_date_obj or end_date_obj:
+            ev_date = parse_event_date(ev.get('Date') or '')
+            if not ev_date:
+                return False
+            if start_date_obj and ev_date < start_date_obj:
+                return False
+            if end_date_obj and ev_date > end_date_obj:
+                return False
 
-                if score(raw) >= fuzzy_threshold:
-                    return True
-                return any(score(tok) >= fuzzy_threshold for tok in tokens)
-
-            if raw in combined:
-                return True
-            if not tokens:
-                return True
-            if search_mode == 'all':
-                return all(tok in combined for tok in tokens)
-            return any(tok in combined for tok in tokens)
-
-        filtered_events = [e for e in filtered_events if matches(e)]
-
-    # Date filtering: single date (legacy) or range [start, end]
-    # If explicit range provided, prefer that
-    def within_range(ev_date, start, end):
-        if not ev_date:
-            return False
-        if start and ev_date < start:
-            return False
-        if end and ev_date > end:
-            return False
         return True
 
-    if start_date or end_date:
-        try:
-            start = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else None
-        except ValueError:
-            start = None
-        try:
-            end = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else None
-        except ValueError:
-            end = None
-        filtered_events = [e for e in filtered_events if within_range(parse_event_date(e.get('Date') or ''), start, end)]
-    elif date_filter:
-        try:
-            target = datetime.strptime(date_filter, "%Y-%m-%d").date()
-        except ValueError:
-            target = None
-        if target:
-            filtered_events = [e for e in filtered_events if parse_event_date(e.get('Date') or '') == target]
+    # SINGLE-PASS FILTERING
+    filtered_events = []
+
+    for event in events_data:
+        # Check library filter
+        if selected_libs and event.get('Library', '') not in selected_libs:
+            continue
+
+        # Check type (age group) filter
+        if selected_types and not (get_event_types(event) & selected_types):
+            continue
+
+        # Check search filter
+        if not matches_search(event):
+            continue
+
+        # Check date filter
+        if not matches_date(event):
+            continue
+
+        # Add distance calculation if needed
+        if user_coords:
+            user_lat, user_lon = user_coords
+            library = event.get('Library', '')
+            location = event.get('Location', '')
+
+            event_coords = get_library_coordinates(library, location)
+            if event_coords:
+                event_lat, event_lon = event_coords
+                distance = haversine_distance(user_lat, user_lon, event_lat, event_lon)
+                event['_distance'] = round(distance, 1)
+
+                # Filter by distance if specified
+                if max_distance is not None and distance > max_distance:
+                    continue
+            else:
+                # Skip events without coordinates if distance filtering is active
+                if max_distance is not None:
+                    continue
+
+        filtered_events.append(event)
+
+    # Sort by distance if geocoding was used
+    if user_coords:
+        filtered_events.sort(key=lambda e: e.get('_distance', float('inf')))
 
     return filtered_events
 
@@ -369,29 +673,81 @@ def events_to_pdf(events, filename_prefix="library_events") -> tuple[BytesIO, st
     return buffer, f"{filename_prefix}.pdf"
 
 def load_latest_csv():
-    """Load the most recent CSV file"""
+    """Load the most recent CSV file using optimized csv module instead of Pandas."""
     global events_data
-    
+
     csv_files = list(DATA_DIR.glob('all_library_events_*.csv'))
-    
+
     if csv_files:
         latest_file = max(csv_files, key=lambda p: p.stat().st_mtime)
         try:
-            df = pd.read_csv(latest_file)
-            # Replace NaN values with empty strings
-            df = df.fillna('')
-            events_data = df.to_dict('records')
-            print(f"Loaded {len(events_data)} events from {latest_file}")
+            # Use csv.DictReader instead of Pandas for lower memory usage
+            with open(latest_file, 'r', newline='', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                events_data = list(reader)
+
+                # Clean empty/None values (equivalent to Pandas fillna)
+                for event in events_data:
+                    for key in event:
+                        if event[key] is None or event[key] == 'nan' or event[key] == '':
+                            event[key] = ''
+
+            # Enhance events with AI summaries if enabled
+            if AI_AVAILABLE and os.getenv("ENABLE_AI_SUMMARIZATION", "false").lower() == "true":
+                print(f"🤖 Enhancing events with AI summaries...")
+                events_data = enhance_events_batch(events_data, max_count=None)  # Process ALL events with fast rule-based summaries
+                print(f"✨ AI enhancement completed")
+
+            print(f"✅ Loaded {len(events_data)} events from {latest_file.name} (using optimized csv module)")
             return latest_file.name
         except Exception as e:
-            print(f"Error loading CSV: {e}")
+            print(f"❌ Error loading CSV: {e}")
             events_data = []
             return None
     else:
-        print(f"No CSV files found in {DATA_DIR}")
+        print(f"⚠️ No CSV files found in {DATA_DIR}")
         events_data = []
         return None
 
+
+def get_library_address_info(library_name: str) -> str:
+    """Get the actual street address for each library."""
+    # Mapping of library names to their actual street addresses
+    library_addresses = {
+        "CPL Budlong Woods": "5630 N Lincoln Avenue, Chicago, IL 60659",
+        "CPL Edgebrook": "5331 W Devon Avenue, Chicago, IL 60646",
+        "Des Plaines": "1501 Ellinwood Street, Des Plaines, IL 60016",
+        "Evanston": "1703 Orrington Avenue, Evanston, IL 60201",
+        "Forest Preserves of Cook County": "536 N Harlem Avenue, River Forest, IL 60305",
+        "Forest Preserves": "536 N Harlem Avenue, River Forest, IL 60305",  # Alternative name
+        "Glencoe": "320 Park Avenue, Glencoe, IL 60022",
+        "Hoffman Estates": "1550 Hassell Road, Hoffman Estates, IL 60169",
+        "Lincolnwood": "4000 W Pratt Avenue, Lincolnwood, IL 60712",
+        "Morton Grove": "6140 Lincoln Avenue, Morton Grove, IL 60053",
+        "Morton Grove (MGPL)": "6140 Lincoln Avenue, Morton Grove, IL 60053",
+        "Niles": "6960 Oakton Street, Niles, IL 60714",
+        "Park Ridge": "20 S Prospect Avenue, Park Ridge, IL 60068",
+        "Skokie": "5215 Oakton Street, Skokie, IL 60077",
+        "Skokie Library": "5215 Oakton Street, Skokie, IL 60077",
+        "Skokie Park District": "9300 Weber Park Place, Skokie, IL 60077",
+        "Skokie Parks": "9300 Weber Park Place, Skokie, IL 60077",
+        "Wilmette": "1242 Wilmette Avenue, Wilmette, IL 60091",
+        "Chicago Parks": "541 N Fairbanks Court, Chicago, IL 60611"
+    }
+
+    return library_addresses.get(library_name, "")
+
+@lru_cache(maxsize=1)
+def _cached_progress_read(mtime: float):
+    """Cached progress file reader - invalidates when file is modified."""
+    with PROGRESS_FILE.open() as f:
+        data = json.load(f)
+        # Add address information to sources
+        if "sources" in data:
+            for source_name, source_info in data["sources"].items():
+                if not source_info.get("address"):
+                    source_info["address"] = get_library_address_info(source_name)
+        return data
 
 def read_progress_file():
     """Return the latest scrape progress snapshot for the UI."""
@@ -410,8 +766,9 @@ def read_progress_file():
             "sources": {}
         }
     try:
-        with PROGRESS_FILE.open() as f:
-            return json.load(f)
+        # Use mtime-based caching to avoid redundant file I/O
+        mtime = PROGRESS_FILE.stat().st_mtime
+        return _cached_progress_read(mtime)
     except Exception as exc:
         return {"summary": {"state": "error", "message": f"Could not read progress: {exc}"}}
 
@@ -419,7 +776,7 @@ def read_progress_file():
 def write_progress_stub(state: str, message: str):
     """Lightweight updater for progress summary without overwriting per-source data."""
     payload = read_progress_file()
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     payload.setdefault("started_at", now)
     payload["updated_at"] = now
     payload.setdefault("sources", {})
@@ -477,7 +834,10 @@ def health():
 @app.route('/api/events')
 def get_events():
     """API endpoint to get filtered events"""
-    library_filter = request.args.get('library', 'All')
+    library_filters = [l.strip() for l in request.args.getlist('library') if (l or '').strip()]
+    fallback_library = (request.args.get('library', '') or '').strip()
+    if not library_filters and fallback_library and fallback_library != 'All':
+        library_filters = [fallback_library]
     # Support multiple `type` params, e.g., ?type=A&type=B
     type_filters = [t.strip() for t in request.args.getlist('type') if (t or '').strip()]
     search_term = request.args.get('search', '').lower().strip()
@@ -487,27 +847,38 @@ def get_events():
     search_fields = [s.strip() for s in request.args.get('search_fields', '').split(',') if (s or '').strip()]
     search_mode = request.args.get('search_mode', 'any').lower().strip() or 'any'
 
+    # Location filtering parameters
+    user_address = request.args.get('address', '').strip()
+    max_distance = request.args.get('distance', '').strip()
+    max_distance = float(max_distance) if max_distance and max_distance.replace('.', '').isdigit() else None
+
     filtered_events = filter_events(
-        library_filter=library_filter,
+        library_filters=library_filters,
         type_filters=type_filters,
         search_term=search_term,
         start_date=start_date,
         end_date=end_date,
         date_filter=date_filter,
         search_fields=search_fields,
-        search_mode=search_mode
+        search_mode=search_mode,
+        user_address=user_address,
+        max_distance=max_distance
     )
 
     return jsonify({
         'events': filtered_events,
-        'total': len(filtered_events)
+        'total': len(filtered_events),
+        'ai_enabled': AI_AVAILABLE and os.getenv("ENABLE_AI_SUMMARIZATION", "false").lower() == "true"
     })
 
 
 @app.route('/api/ics')
 def download_ics():
     """Download an ICS file for all or filtered events using the same filters as /api/events."""
-    library_filter = request.args.get('library', 'All')
+    library_filters = [l.strip() for l in request.args.getlist('library') if (l or '').strip()]
+    fallback_library = (request.args.get('library', '') or '').strip()
+    if not library_filters and fallback_library and fallback_library != 'All':
+        library_filters = [fallback_library]
     type_filters = [t.strip() for t in request.args.getlist('type') if (t or '').strip()]
     search_term = request.args.get('search', '').lower().strip()
     date_filter = request.args.get('date', '').strip()
@@ -516,23 +887,30 @@ def download_ics():
     search_fields = [s.strip() for s in request.args.get('search_fields', '').split(',') if (s or '').strip()]
     search_mode = request.args.get('search_mode', 'any').lower().strip() or 'any'
 
+    # Location filtering parameters
+    user_address = request.args.get('address', '').strip()
+    max_distance = request.args.get('distance', '').strip()
+    max_distance = float(max_distance) if max_distance and max_distance.replace('.', '').isdigit() else None
+
     filtered_events = filter_events(
-        library_filter=library_filter,
+        library_filters=library_filters,
         type_filters=type_filters,
         search_term=search_term,
         start_date=start_date,
         end_date=end_date,
         date_filter=date_filter,
         search_fields=search_fields,
-        search_mode=search_mode
+        search_mode=search_mode,
+        user_address=user_address,
+        max_distance=max_distance
     )
 
     if not filtered_events:
         return jsonify({'error': 'No events available for ICS export'}), 404
 
     filename_parts = ["library_events"]
-    if library_filter and library_filter != 'All':
-        filename_parts.append(slugify(library_filter))
+    if library_filters:
+        filename_parts.append(slugify("_".join(sorted(set(library_filters)))))
     if start_date or end_date:
         filename_parts.append("_".join(filter(None, [start_date, end_date])))
     ics_content, filename = events_to_ics(filtered_events, "_".join(filter(None, filename_parts)))
@@ -550,7 +928,10 @@ def download_ics():
 @app.route('/api/pdf')
 def download_pdf():
     """Download a PDF organized by day, then library, then time, honoring any filters."""
-    library_filter = request.args.get('library', 'All')
+    library_filters = [l.strip() for l in request.args.getlist('library') if (l or '').strip()]
+    fallback_library = (request.args.get('library', '') or '').strip()
+    if not library_filters and fallback_library and fallback_library != 'All':
+        library_filters = [fallback_library]
     type_filters = [t.strip() for t in request.args.getlist('type') if (t or '').strip()]
     search_term = request.args.get('search', '').lower().strip()
     date_filter = request.args.get('date', '').strip()
@@ -559,23 +940,30 @@ def download_pdf():
     search_fields = [s.strip() for s in request.args.get('search_fields', '').split(',') if (s or '').strip()]
     search_mode = request.args.get('search_mode', 'any').lower().strip() or 'any'
 
+    # Location filtering parameters
+    user_address = request.args.get('address', '').strip()
+    max_distance = request.args.get('distance', '').strip()
+    max_distance = float(max_distance) if max_distance and max_distance.replace('.', '').isdigit() else None
+
     filtered_events = filter_events(
-        library_filter=library_filter,
+        library_filters=library_filters,
         type_filters=type_filters,
         search_term=search_term,
         start_date=start_date,
         end_date=end_date,
         date_filter=date_filter,
         search_fields=search_fields,
-        search_mode=search_mode
+        search_mode=search_mode,
+        user_address=user_address,
+        max_distance=max_distance
     )
 
     if not filtered_events:
         return jsonify({'error': 'No events available for PDF export'}), 404
 
     filename_parts = ["library_events"]
-    if library_filter and library_filter != 'All':
-        filename_parts.append(slugify(library_filter))
+    if library_filters:
+        filename_parts.append(slugify("_".join(sorted(set(library_filters)))))
     if start_date or end_date:
         filename_parts.append("_".join(filter(None, [start_date, end_date])))
 

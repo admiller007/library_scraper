@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<html class="light" lang="en">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chicago Library Events</title>
     <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700;900&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
     <script>
         tailwind.config = {
@@ -13,240 +13,526 @@
             theme: {
                 extend: {
                     colors: {
-                        "primary": "#137fec",
-                        "background-light": "#f6f7f8",
-                        "background-dark": "#101922",
+                        "burgundy": {
+                            50: "#fdf4f4",
+                            100: "#fbe8e8",
+                            200: "#f6d0d0",
+                            300: "#eeacac",
+                            400: "#e37d7d",
+                            500: "#d35555",
+                            600: "#b83939",
+                            700: "#9a2a2a",
+                            800: "#7d2424",
+                            900: "#672323",
+                        },
+                        "cream": "#faf6f1",
+                        "parchment": "#f4ede3",
+                        "sage": {
+                            50: "#f4f7f4",
+                            100: "#e6ede6",
+                            200: "#cddccd",
+                            300: "#a8c4a8",
+                            400: "#7ca67c",
+                            500: "#5a8a5a",
+                            600: "#446d44",
+                            700: "#375737",
+                            800: "#2e462e",
+                            900: "#273927",
+                        },
+                        "amber": {
+                            50: "#fefbf3",
+                            100: "#fdf5e0",
+                            200: "#fae8b7",
+                            300: "#f6d583",
+                            400: "#f2bc4d",
+                            500: "#eda228",
+                            600: "#d9831d",
+                            700: "#b4621a",
+                            800: "#924d1b",
+                            900: "#78401a",
+                        },
                     },
                     fontFamily: {
-                        "display": ["Inter", "sans-serif"]
+                        "display": ["Playfair Display", "serif"],
+                        "sans": ["DM Sans", "sans-serif"]
                     },
-                    borderRadius: {"DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px"},
                 },
             },
         }
     </script>
     <style>
-        .material-symbols-outlined {
-            font-variation-settings:
-            'FILL' 0,
-            'wght' 400,
-            'GRAD' 0,
-            'opsz' 24
+        * {
+            font-family: 'DM Sans', sans-serif;
         }
+
+        h1, h2, h3, h4, h5, h6 {
+            font-family: 'Playfair Display', serif;
+        }
+
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+
+        /* Vintage paper texture overlay */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image:
+                repeating-linear-gradient(
+                    0deg,
+                    rgba(0,0,0,0.015) 0px,
+                    transparent 1px,
+                    transparent 2px,
+                    rgba(0,0,0,0.015) 3px
+                );
+            pointer-events: none;
+            z-index: 9999;
+            opacity: 0.3;
+        }
+
         .checkbox-container {
             max-height: 150px;
             overflow-y: auto;
             scrollbar-width: thin;
+            scrollbar-color: #9a2a2a #f4ede3;
         }
+
         .checkbox-container::-webkit-scrollbar {
-            width: 6px;
+            width: 8px;
         }
+
         .checkbox-container::-webkit-scrollbar-track {
-            background: #f1f5f9;
+            background: #f4ede3;
+            border-radius: 4px;
         }
+
         .checkbox-container::-webkit-scrollbar-thumb {
-            background: #cbd5e1;
-            border-radius: 3px;
+            background: #9a2a2a;
+            border-radius: 4px;
+        }
+
+        .checkbox-container::-webkit-scrollbar-thumb:hover {
+            background: #7d2424;
+        }
+
+        /* Card catalog card effect */
+        .event-card {
+            position: relative;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            background: linear-gradient(135deg, #faf6f1 0%, #f4ede3 100%);
+        }
+
+        .event-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 8px;
+            background: linear-gradient(90deg,
+                #9a2a2a 0%,
+                #d35555 25%,
+                #5a8a5a 50%,
+                #eda228 75%,
+                #9a2a2a 100%
+            );
+            border-radius: 12px 12px 0 0;
+        }
+
+        .event-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 24px rgba(122, 42, 42, 0.15);
+        }
+
+        /* Library stamp effect */
+        .library-badge {
+            position: relative;
+            padding: 4px 12px;
+            border: 2px solid currentColor;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-size: 11px;
+            transform: rotate(-2deg);
+        }
+
+        /* Tab effect on cards */
+        .card-tab {
+            position: absolute;
+            top: -1px;
+            right: 24px;
+            background: #9a2a2a;
+            color: #faf6f1;
+            padding: 6px 16px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            clip-path: polygon(0 0, 100% 0, 95% 100%, 5% 100%);
+        }
+
+        /* Vintage button styling */
+        .vintage-btn {
+            position: relative;
+            background: linear-gradient(135deg, #9a2a2a 0%, #7d2424 100%);
+            border: 2px solid #672323;
+            box-shadow:
+                0 2px 4px rgba(122, 42, 42, 0.3),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            transition: all 0.2s;
+        }
+
+        .vintage-btn:hover {
+            background: linear-gradient(135deg, #7d2424 0%, #672323 100%);
+            box-shadow:
+                0 4px 8px rgba(122, 42, 42, 0.4),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            transform: translateY(-1px);
+        }
+
+        .vintage-btn:active {
+            transform: translateY(0);
+            box-shadow:
+                0 1px 2px rgba(122, 42, 42, 0.3),
+                inset 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        /* Header with diagonal accent */
+        .header-accent {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .header-accent::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 200px;
+            height: 100%;
+            background: linear-gradient(135deg, transparent 0%, rgba(90, 138, 90, 0.1) 100%);
+            transform: skewX(-15deg);
+            pointer-events: none;
+        }
+
+        /* Age group color overrides with vintage palette */
+        .age-baby { background-color: #f6d0d0; color: #7d2424; border: 1px solid #e37d7d; }
+        .age-preschool { background-color: #fae8b7; color: #78401a; border: 1px solid #f2bc4d; }
+        .age-elementary { background-color: #cddccd; color: #2e462e; border: 1px solid #7ca67c; }
+        .age-middle { background-color: #e6ede6; color: #375737; border: 1px solid #5a8a5a; }
+        .age-teen { background-color: #fbe8e8; color: #9a2a2a; border: 1px solid #d35555; }
+        .age-adult { background-color: #f4ede3; color: #4a4030; border: 1px solid #b8a68c; }
+        .age-family { background-color: #fdf5e0; color: #924d1b; border: 1px solid #eda228; }
+        .age-kids { background-color: #fae8b7; color: #78401a; border: 1px solid #f6d583; }
+
+        /* Decorative flourish */
+        .flourish {
+            display: inline-block;
+            font-family: 'Playfair Display', serif;
+            font-size: 24px;
+            color: #9a2a2a;
+            margin: 0 12px;
+            opacity: 0.5;
         }
     </style>
 </head>
-<body class="font-display bg-background-light dark:bg-background-dark min-h-screen">
+<body class="font-sans bg-cream min-h-screen">
     <div class="relative flex h-auto min-h-screen w-full flex-col">
-        <!-- Header -->
-        <header class="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-background-dark/80 backdrop-blur-sm px-6 py-4">
-            <div class="flex items-center gap-3">
-                <span class="material-symbols-outlined text-primary text-2xl">local_library</span>
-                <div>
-                    <h1 class="text-slate-800 dark:text-slate-200 text-xl font-bold">Chicago Library Events</h1>
-                    <p class="text-slate-600 dark:text-slate-400 text-sm">
-                        Total Events: {{ total_events }}
-                        {% if csv_file %}• Loaded from: {{ csv_file }}{% endif %}
-                    </p>
+        <!-- Ornate Header -->
+        <header class="sticky top-0 z-10 bg-gradient-to-r from-burgundy-800 to-burgundy-700 text-cream border-b-4 border-amber-500 px-6 py-6 header-accent shadow-lg">
+            <div class="max-w-7xl mx-auto">
+                <div class="flex items-center justify-between mb-4">
+                    <div class="flex items-start gap-4">
+                        <div class="bg-cream/10 p-3 rounded-lg backdrop-blur-sm border border-cream/20">
+                            <span class="material-symbols-outlined text-amber-400 text-3xl">local_library</span>
+                        </div>
+                        <div>
+                            <h1 class="text-4xl font-display font-bold text-cream mb-1 tracking-tight">
+                                Chicago Library Events
+                            </h1>
+                            <p class="text-cream/80 text-sm font-medium">
+                                <span class="inline-flex items-center gap-2">
+                                    <span class="material-symbols-outlined text-xs">event</span>
+                                    Total Events: {{ total_events }}
+                                </span>
+                                {% if csv_file %}
+                                <span class="mx-2 text-amber-400">•</span>
+                                <span class="inline-flex items-center gap-2">
+                                    <span class="material-symbols-outlined text-xs">description</span>
+                                    {{ csv_file }}
+                                </span>
+                                {% endif %}
+                            </p>
+                        </div>
+                    </div>
+                    <div class="flex flex-wrap gap-2 sm:gap-3">
+                        <button onclick="downloadICS()"
+                                class="vintage-btn inline-flex items-center gap-2 px-5 py-2.5 bg-sage-700 text-cream rounded-lg font-bold transition-all text-sm">
+                            <span class="material-symbols-outlined text-lg">calendar_month</span>
+                            ICS
+                        </button>
+                        <button onclick="downloadPDF()"
+                                class="vintage-btn inline-flex items-center gap-2 px-5 py-2.5 text-cream rounded-lg font-bold transition-all text-sm">
+                            <span class="material-symbols-outlined text-lg">picture_as_pdf</span>
+                            PDF
+                        </button>
+                        <button onclick="refreshData()"
+                                id="refresh-btn"
+                                class="vintage-btn inline-flex items-center gap-2 px-5 py-2.5 bg-amber-700 text-cream rounded-lg font-bold transition-all text-sm">
+                            <span class="material-symbols-outlined text-lg">refresh</span>
+                            Refresh
+                        </button>
+                    </div>
                 </div>
-            </div>
-            <div class="flex gap-3">
-                <button onclick="downloadICS()"
-                        class="inline-flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition-colors">
-                    <span class="material-symbols-outlined text-lg">calendar_month</span>
-                    Download ICS
-                </button>
-                <button onclick="downloadPDF()"
-                        class="inline-flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors">
-                    <span class="material-symbols-outlined text-lg">picture_as_pdf</span>
-                    Download PDF
-                </button>
-                <button onclick="refreshData()"
-                        id="refresh-btn"
-                        class="inline-flex items-center gap-2 px-4 py-2 bg-primary hover:bg-blue-600 text-white rounded-lg font-medium transition-colors">
-                    <span class="material-symbols-outlined text-lg">refresh</span>
-                    Refresh Data
-                </button>
             </div>
         </header>
 
-        <!-- Filters Section -->
-        <div class="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-6 py-4">
-            <div class="grid grid-cols-1 lg:grid-cols-4 xl:grid-cols-6 gap-4 items-end">
-                <!-- Library Filter -->
-                <div>
-                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Library</label>
-                    <select id="library-filter"
-                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-primary focus:border-primary">
-                        <option value="All">All Libraries</option>
-                        {% for library in libraries %}
-                        <option value="{{ library }}">{{ library }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
+        <!-- Decorative divider -->
+        <div class="h-2 bg-gradient-to-r from-burgundy-600 via-amber-500 to-sage-600"></div>
 
-                <!-- Age Group Filter -->
-                <div>
-                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Age Groups</label>
-                    <div class="border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 p-3 checkbox-container">
-                        {% if types %}
-                            {% for t in types %}
-                            <label class="flex items-center text-sm text-slate-700 dark:text-slate-300 mb-2 last:mb-0 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 px-2 py-1 rounded">
-                                <input type="checkbox" name="type" value="{{ t }}"
-                                       class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary mr-2">
-                                <span class="truncate">{{ t }}</span>
+        <!-- Filters Section -->
+        <div class="bg-parchment border-b-2 border-burgundy-200 px-6 py-6 shadow-inner">
+            <div class="max-w-7xl mx-auto">
+                <h2 class="text-2xl font-display font-bold text-burgundy-900 mb-4 flex items-center">
+                    <span class="flourish">❦</span>
+                    Filter Events
+                    <span class="flourish">❦</span>
+                </h2>
+                <div class="grid grid-cols-1 lg:grid-cols-4 xl:grid-cols-7 gap-4 items-end">
+                    <!-- Library Filter -->
+                    <div>
+                        <div class="flex items-center justify-between mb-2">
+                            <label class="block text-sm font-bold text-burgundy-900 uppercase tracking-wide">Libraries</label>
+                            <button type="button" onclick="resetLibraries()"
+                                    class="text-xs text-burgundy-700 hover:text-burgundy-900 font-semibold underline">
+                                Reset
+                            </button>
+                        </div>
+                        <div class="border-2 border-burgundy-300 rounded-lg bg-cream p-3 checkbox-container shadow-inner" id="library-list">
+                            <label class="flex items-center text-sm text-burgundy-900 mb-2 last:mb-0 cursor-pointer hover:bg-burgundy-50 px-2 py-1.5 rounded transition-colors">
+                                <input type="checkbox" name="library" value="All" checked
+                                       class="w-4 h-4 text-burgundy-700 border-burgundy-400 rounded focus:ring-burgundy-500 mr-2">
+                                <span class="truncate font-medium">All Libraries</span>
+                            </label>
+                            {% for library in libraries %}
+                            <label class="flex items-center text-sm text-burgundy-900 mb-2 last:mb-0 cursor-pointer hover:bg-burgundy-50 px-2 py-1.5 rounded transition-colors">
+                                <input type="checkbox" name="library" value="{{ library }}"
+                                       class="w-4 h-4 text-burgundy-700 border-burgundy-400 rounded focus:ring-burgundy-500 mr-2">
+                                <span class="truncate font-medium">{{ library }}</span>
                             </label>
                             {% endfor %}
-                        {% endif %}
+                        </div>
                     </div>
-                </div>
 
-                <!-- Search -->
-                <div class="space-y-2">
+                    <!-- Age Group Filter -->
                     <div>
-                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Search</label>
-                        <div class="relative">
-                            <span class="material-symbols-outlined absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 text-lg">search</span>
-                            <input type="text" id="search-input" placeholder="Search events..."
-                                   class="w-full pl-10 pr-4 py-2 border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-primary focus:border-primary">
+                        <label class="block text-sm font-bold text-burgundy-900 mb-2 uppercase tracking-wide">Age Groups</label>
+                        <div class="border-2 border-burgundy-300 rounded-lg bg-cream p-3 checkbox-container shadow-inner">
+                            {% if types %}
+                                {% for t in types %}
+                                <label class="flex items-center text-sm text-burgundy-900 mb-2 last:mb-0 cursor-pointer hover:bg-burgundy-50 px-2 py-1.5 rounded transition-colors">
+                                    <input type="checkbox" name="type" value="{{ t }}"
+                                           class="w-4 h-4 text-burgundy-700 border-burgundy-400 rounded focus:ring-burgundy-500 mr-2">
+                                    <span class="truncate font-medium">{{ t }}</span>
+                                </label>
+                                {% endfor %}
+                            {% endif %}
                         </div>
                     </div>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+
+                    <!-- Search -->
+                    <div class="space-y-2">
                         <div>
-                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Search Mode</label>
-                            <select id="search-mode"
-                                    class="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-primary focus:border-primary">
-                                <option value="any" selected>Any word</option>
-                                <option value="all">All words</option>
-                                <option value="exact">Exact phrase</option>
-                                <option value="fuzzy">Fuzzy match</option>
-                            </select>
+                            <label class="block text-sm font-bold text-burgundy-900 mb-2 uppercase tracking-wide">Search</label>
+                            <div class="relative">
+                                <span class="material-symbols-outlined absolute left-3 top-1/2 transform -translate-y-1/2 text-burgundy-400 text-lg">search</span>
+                                <input type="text" id="search-input" placeholder="Search events..."
+                                       class="w-full pl-10 pr-4 py-2.5 border-2 border-burgundy-300 rounded-lg bg-cream text-burgundy-900 placeholder-burgundy-400 focus:ring-2 focus:ring-burgundy-500 focus:border-burgundy-500 font-medium shadow-inner">
+                            </div>
                         </div>
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Fields</label>
-                            <div class="grid grid-cols-2 gap-2 text-sm">
-                                <label class="flex items-center gap-2 text-slate-700 dark:text-slate-300">
-                                    <input type="checkbox" name="search-field" value="title" class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary" checked>
-                                    <span>Title</span>
-                                </label>
-                                <label class="flex items-center gap-2 text-slate-700 dark:text-slate-300">
-                                    <input type="checkbox" name="search-field" value="description" class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary" checked>
-                                    <span>Description</span>
-                                </label>
-                                <label class="flex items-center gap-2 text-slate-700 dark:text-slate-300">
-                                    <input type="checkbox" name="search-field" value="location" class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary" checked>
-                                    <span>Location</span>
-                                </label>
-                                <label class="flex items-center gap-2 text-slate-700 dark:text-slate-300">
-                                    <input type="checkbox" name="search-field" value="library" class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary">
-                                    <span>Library</span>
-                                </label>
-                                <label class="flex items-center gap-2 text-slate-700 dark:text-slate-300">
-                                    <input type="checkbox" name="search-field" value="age_group" class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary">
-                                    <span>Age Group</span>
-                                </label>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs font-bold text-burgundy-800 mb-2 uppercase tracking-wide">Mode</label>
+                                <select id="search-mode"
+                                        class="w-full px-3 py-2 border-2 border-burgundy-300 rounded-lg bg-cream text-burgundy-900 focus:ring-2 focus:ring-burgundy-500 focus:border-burgundy-500 font-medium shadow-inner">
+                                    <option value="any" selected>Any word</option>
+                                    <option value="all">All words</option>
+                                    <option value="exact">Exact</option>
+                                    <option value="fuzzy">Fuzzy</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-burgundy-800 mb-2 uppercase tracking-wide">Fields</label>
+                                <div class="grid grid-cols-2 gap-2 text-xs">
+                                    <label class="flex items-center gap-1.5 text-burgundy-900">
+                                        <input type="checkbox" name="search-field" value="title"
+                                               class="w-3.5 h-3.5 text-burgundy-700 border-burgundy-400 rounded focus:ring-burgundy-500" checked>
+                                        <span class="font-medium">Title</span>
+                                    </label>
+                                    <label class="flex items-center gap-1.5 text-burgundy-900">
+                                        <input type="checkbox" name="search-field" value="description"
+                                               class="w-3.5 h-3.5 text-burgundy-700 border-burgundy-400 rounded focus:ring-burgundy-500" checked>
+                                        <span class="font-medium">Desc</span>
+                                    </label>
+                                    <label class="flex items-center gap-1.5 text-burgundy-900">
+                                        <input type="checkbox" name="search-field" value="location"
+                                               class="w-3.5 h-3.5 text-burgundy-700 border-burgundy-400 rounded focus:ring-burgundy-500" checked>
+                                        <span class="font-medium">Loc</span>
+                                    </label>
+                                    <label class="flex items-center gap-1.5 text-burgundy-900">
+                                        <input type="checkbox" name="search-field" value="library"
+                                               class="w-3.5 h-3.5 text-burgundy-700 border-burgundy-400 rounded focus:ring-burgundy-500">
+                                        <span class="font-medium">Lib</span>
+                                    </label>
+                                </div>
                             </div>
                         </div>
                     </div>
-                </div>
 
-                <!-- Date Preset -->
-                <div>
-                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Date Range</label>
-                    <select id="date-preset"
-                            class="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-primary focus:border-primary">
-                        <option value="all">All Dates</option>
-                        <option value="today">Today</option>
-                        <option value="tomorrow">Tomorrow</option>
-                        <option value="next7">Next 7 Days</option>
-                        <option value="next14">Next 14 Days</option>
-                        <option value="thisweek">This Week</option>
-                        <option value="weekend">This Weekend</option>
-                        <option value="thismonth">This Month</option>
-                        <option value="custom">Custom Range</option>
-                    </select>
-                </div>
+                    <!-- Date Preset -->
+                    <div>
+                        <label class="block text-sm font-bold text-burgundy-900 mb-2 uppercase tracking-wide">Date Range</label>
+                        <select id="date-preset"
+                                class="w-full px-3 py-2.5 border-2 border-burgundy-300 rounded-lg bg-cream text-burgundy-900 focus:ring-2 focus:ring-burgundy-500 focus:border-burgundy-500 font-medium shadow-inner">
+                            <option value="all">All Dates</option>
+                            <option value="today">Today</option>
+                            <option value="tomorrow">Tomorrow</option>
+                            <option value="next7">Next 7 Days</option>
+                            <option value="next14">Next 14 Days</option>
+                            <option value="thisweek">This Week</option>
+                            <option value="weekend">Weekend</option>
+                            <option value="thismonth">This Month</option>
+                            <option value="custom">Custom</option>
+                        </select>
+                    </div>
 
-                <!-- Custom Date Range (Hidden by default) -->
-                <div id="custom-date-range" class="hidden col-span-2">
-                    <div class="grid grid-cols-2 gap-2">
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Start Date</label>
-                            <input type="date" id="start-date"
-                                   {% if min_date %}min="{{ min_date }}"{% endif %}
-                                   {% if max_date %}max="{{ max_date }}"{% endif %}
-                                   class="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-primary focus:border-primary">
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">End Date</label>
-                            <input type="date" id="end-date"
-                                   {% if min_date %}min="{{ min_date }}"{% endif %}
-                                   {% if max_date %}max="{{ max_date }}"{% endif %}
-                                   class="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-primary focus:border-primary">
+                    <!-- Custom Date Range -->
+                    <div id="custom-date-range" class="hidden col-span-2">
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label class="block text-xs font-bold text-burgundy-800 mb-2 uppercase tracking-wide">Start</label>
+                                <input type="date" id="start-date"
+                                       {% if min_date %}min="{{ min_date }}"{% endif %}
+                                       {% if max_date %}max="{{ max_date }}"{% endif %}
+                                       class="w-full px-3 py-2 border-2 border-burgundy-300 rounded-lg bg-cream text-burgundy-900 focus:ring-2 focus:ring-burgundy-500 focus:border-burgundy-500 font-medium shadow-inner">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-burgundy-800 mb-2 uppercase tracking-wide">End</label>
+                                <input type="date" id="end-date"
+                                       {% if min_date %}min="{{ min_date }}"{% endif %}
+                                       {% if max_date %}max="{{ max_date }}"{% endif %}
+                                       class="w-full px-3 py-2 border-2 border-burgundy-300 rounded-lg bg-cream text-burgundy-900 focus:ring-2 focus:ring-burgundy-500 focus:border-burgundy-500 font-medium shadow-inner">
+                            </div>
                         </div>
                     </div>
-                </div>
 
-                <!-- Apply Filters Button -->
-                <div class="lg:col-span-1">
-                    <button onclick="applyFilters()"
-                            class="w-full px-4 py-2 bg-primary hover:bg-blue-600 text-white rounded-lg font-medium transition-colors inline-flex items-center justify-center gap-2">
-                        <span class="material-symbols-outlined text-lg">filter_list</span>
-                        Apply Filters
-                    </button>
+                    <!-- Location Filter -->
+                    <div>
+                        <label class="block text-sm font-bold text-burgundy-900 mb-2 uppercase tracking-wide">
+                            <span class="material-symbols-outlined text-sm mr-1 align-text-bottom text-sage-700">location_on</span>
+                            Location
+                        </label>
+                        <div class="space-y-2">
+                            <div class="relative">
+                                <span class="material-symbols-outlined absolute left-3 top-1/2 transform -translate-y-1/2 text-burgundy-400 text-lg">home</span>
+                                <input type="text" id="address-input" placeholder="Address or ZIP..."
+                                       class="w-full pl-10 pr-4 py-2 border-2 border-burgundy-300 rounded-lg bg-cream text-burgundy-900 placeholder-burgundy-400 focus:ring-2 focus:ring-burgundy-500 focus:border-burgundy-500 font-medium shadow-inner">
+                            </div>
+                            <div>
+                                <select id="distance-select"
+                                        class="w-full px-3 py-2 border-2 border-burgundy-300 rounded-lg bg-cream text-burgundy-900 focus:ring-2 focus:ring-burgundy-500 focus:border-burgundy-500 font-medium shadow-inner text-sm">
+                                    <option value="">Any distance</option>
+                                    <option value="5">5 miles</option>
+                                    <option value="10">10 miles</option>
+                                    <option value="25">25 miles</option>
+                                    <option value="50">50 miles</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Apply Button -->
+                    <div class="lg:col-span-1">
+                        <button onclick="applyFilters()"
+                                class="vintage-btn w-full px-4 py-2.5 bg-burgundy-700 text-cream rounded-lg font-bold transition-all inline-flex items-center justify-center gap-2 text-sm">
+                            <span class="material-symbols-outlined text-lg">filter_list</span>
+                            Apply
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <!-- Scrape Progress -->
-        <section class="px-6 py-4 bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800">
-            <div class="flex items-center justify-between mb-3">
-                <div>
-                    <p class="text-sm font-semibold text-slate-800 dark:text-slate-200">Scrape Progress</p>
-                    <p id="progress-meta" class="text-xs text-slate-500 dark:text-slate-400">Idle</p>
+        <!-- Active Filters Badge Bar -->
+        <section class="px-6 py-3 bg-cream border-b border-burgundy-200">
+            <div class="max-w-7xl mx-auto">
+                <div class="flex flex-wrap items-center gap-3">
+                    <span class="text-xs uppercase tracking-wider text-burgundy-700 font-bold">Active Filters:</span>
+                    <div id="active-filters" class="flex flex-wrap gap-2 text-sm"></div>
+                    <button id="clear-filters-btn" type="button" onclick="clearAllFilters()"
+                            class="hidden text-xs text-burgundy-700 hover:text-burgundy-900 border border-burgundy-400 hover:border-burgundy-600 px-3 py-1 rounded-full font-bold uppercase tracking-wide transition-colors">
+                        Clear All
+                    </button>
                 </div>
-                <button onclick="fetchProgress(true)"
-                        class="inline-flex items-center gap-2 px-3 py-2 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
-                    <span class="material-symbols-outlined text-base">sync</span>
-                    Sync Progress
-                </button>
             </div>
-            <div id="progress-summary" class="flex flex-wrap gap-3 text-sm text-slate-700 dark:text-slate-300">
-                <span class="text-xs text-slate-500">Waiting for a run...</span>
+        </section>
+
+        <!-- Progress Section (Collapsible) -->
+        <section class="px-6 py-4 bg-parchment border-b border-burgundy-200">
+            <div class="max-w-7xl mx-auto">
+                <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+                    <div>
+                        <p class="text-base font-display font-bold text-burgundy-900">Scrape Progress</p>
+                        <p id="progress-meta" class="text-xs text-burgundy-600 font-medium">Idle</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button id="progress-toggle"
+                                type="button"
+                                class="inline-flex items-center gap-2 rounded-lg border-2 border-burgundy-300 bg-cream px-3 py-2 text-sm font-bold text-burgundy-900 hover:bg-burgundy-50 transition-colors"
+                                aria-expanded="true">
+                            <span id="progress-toggle-icon" class="material-symbols-outlined text-base leading-none">expand_less</span>
+                            <span id="progress-toggle-label">Hide</span>
+                        </button>
+                        <button onclick="fetchProgress(true)"
+                                class="inline-flex items-center gap-2 px-3 py-2 text-sm bg-cream border-2 border-burgundy-300 rounded-lg text-burgundy-900 hover:bg-burgundy-50 transition-colors font-bold">
+                            <span class="material-symbols-outlined text-base">sync</span>
+                            Sync
+                        </button>
+                    </div>
+                </div>
+                <div id="progress-body" class="space-y-3">
+                    <div id="progress-summary" class="flex flex-wrap gap-3 text-sm text-burgundy-800 font-medium">
+                        <span class="text-xs text-burgundy-500">Waiting for run...</span>
+                    </div>
+                    <div id="progress-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3"></div>
+                </div>
             </div>
-            <div id="progress-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 mt-3"></div>
         </section>
 
         <!-- Events Grid -->
-        <main class="flex-1 p-6">
-            <div id="events-grid" class="grid gap-6 grid-cols-1 lg:grid-cols-2 xl:grid-cols-3">
-                <div class="col-span-full text-center py-12">
-                    <div class="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full mx-auto mb-4"></div>
-                    <p class="text-slate-600 dark:text-slate-400">Loading events...</p>
+        <main class="flex-1 p-6 bg-gradient-to-b from-cream to-parchment">
+            <div class="max-w-7xl mx-auto">
+                <div id="events-grid" class="grid gap-6 grid-cols-1 lg:grid-cols-2 xl:grid-cols-3">
+                    <div class="col-span-full text-center py-12">
+                        <div class="animate-spin w-10 h-10 border-4 border-burgundy-600 border-t-transparent rounded-full mx-auto mb-4"></div>
+                        <p class="text-burgundy-600 font-medium">Loading events...</p>
+                    </div>
                 </div>
             </div>
         </main>
 
-        <!-- Status Bar -->
-        <footer class="border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-6 py-3">
-            <div class="flex items-center justify-between">
-                <span id="status" class="text-sm text-slate-600 dark:text-slate-400">Ready</span>
-                <div class="text-xs text-slate-500 dark:text-slate-500">
-                    Last updated: <span id="last-updated">Loading...</span>
+        <!-- Vintage Footer -->
+        <footer class="border-t-4 border-burgundy-700 bg-gradient-to-r from-burgundy-900 to-burgundy-800 text-cream px-6 py-4">
+            <div class="max-w-7xl mx-auto">
+                <div class="flex items-center justify-between">
+                    <span id="status" class="text-sm font-medium">Ready</span>
+                    <div class="text-xs text-cream/70 font-medium">
+                        Updated: <span id="last-updated">Loading...</span>
+                    </div>
                 </div>
             </div>
         </footer>
@@ -260,10 +546,202 @@
         let lastProgressState = 'idle';
         let lastEventsTotal = 0;
         let lastDataLoadTs = null;
+        let progressCollapsed = false;
 
-        // Load events on page load
+        function ensureProgressToggleExists() {
+            const existing = document.getElementById('progress-toggle');
+            if (existing) return existing;
+            const syncBtn = document.querySelector('button[onclick="fetchProgress(true)"]');
+            if (!syncBtn || !syncBtn.parentElement) return null;
+            const btn = document.createElement('button');
+            btn.id = 'progress-toggle';
+            btn.type = 'button';
+            btn.className = 'inline-flex items-center gap-2 rounded-lg border-2 border-burgundy-300 bg-cream px-3 py-2 text-sm font-bold text-burgundy-900 hover:bg-burgundy-50 transition-colors';
+            btn.setAttribute('aria-expanded', 'true');
+
+            const icon = document.createElement('span');
+            icon.id = 'progress-toggle-icon';
+            icon.className = 'material-symbols-outlined text-base leading-none';
+            icon.textContent = 'expand_less';
+
+            const label = document.createElement('span');
+            label.id = 'progress-toggle-label';
+            label.textContent = 'Hide';
+
+            btn.appendChild(icon);
+            btn.appendChild(label);
+            btn.addEventListener('click', toggleProgressCollapse);
+
+            syncBtn.parentElement.insertBefore(btn, syncBtn);
+            return btn;
+        }
+
+        function setProgressCollapsed(collapsed) {
+            progressCollapsed = collapsed;
+            const body = document.getElementById('progress-body');
+            const icon = document.getElementById('progress-toggle-icon');
+            const label = document.getElementById('progress-toggle-label');
+            const toggle = document.getElementById('progress-toggle');
+            if (body) body.classList.toggle('hidden', collapsed);
+            if (icon) icon.textContent = collapsed ? 'expand_more' : 'expand_less';
+            if (label) label.textContent = collapsed ? 'Show' : 'Hide';
+            if (toggle) toggle.setAttribute('aria-expanded', (!collapsed).toString());
+            try {
+                localStorage.setItem('progressCollapsed', String(collapsed));
+            } catch (e) {}
+        }
+
+        function toggleProgressCollapse() {
+            setProgressCollapsed(!progressCollapsed);
+        }
+
+        function setupLibraryCheckboxes() {
+            const allBox = document.querySelector('input[name="library"][value="All"]');
+            const libBoxes = Array.from(document.querySelectorAll('input[name="library"]'));
+            if (!allBox || !libBoxes.length) return;
+            const otherBoxes = libBoxes.filter(cb => cb.value !== 'All');
+
+            const applyLibraryFilter = () => applyFilters();
+            const ensureSelection = () => {
+                if (!otherBoxes.some(cb => cb.checked)) allBox.checked = true;
+            };
+
+            allBox.addEventListener('change', () => {
+                if (allBox.checked) otherBoxes.forEach(cb => cb.checked = false);
+                applyLibraryFilter();
+            });
+
+            otherBoxes.forEach(cb => {
+                cb.addEventListener('change', () => {
+                    if (cb.checked) allBox.checked = false;
+                    ensureSelection();
+                    applyLibraryFilter();
+                });
+            });
+        }
+
+        function getSelectedLibraries() {
+            return Array.from(document.querySelectorAll('input[name="library"]:checked'))
+                .map(cb => cb.value)
+                .filter(v => v && v !== 'All');
+        }
+
+        function resetLibraries() {
+            const allBox = document.querySelector('input[name="library"][value="All"]');
+            const otherBoxes = Array.from(document.querySelectorAll('input[name="library"]')).filter(cb => cb.value !== 'All');
+            if (allBox) allBox.checked = true;
+            otherBoxes.forEach(cb => cb.checked = false);
+        }
+
+        function renderActiveFilters(dateNote = '') {
+            const container = document.getElementById('active-filters');
+            const clearBtn = document.getElementById('clear-filters-btn');
+            if (!container) return;
+
+            const chips = [];
+
+            const libs = getSelectedLibraries();
+            libs.forEach(lib => chips.push({ type: 'library', value: lib, label: lib }));
+
+            const ages = Array.from(document.querySelectorAll('input[name="type"]:checked')).map(cb => cb.value);
+            ages.forEach(age => chips.push({ type: 'age', value: age, label: age }));
+
+            const search = document.getElementById('search-input').value.trim();
+            if (search) chips.push({ type: 'search', value: 'search', label: `"${search}"` });
+
+            const address = document.getElementById('address-input').value.trim();
+            const distance = document.getElementById('distance-select').value;
+            if (address && distance) {
+                chips.push({ type: 'location', value: 'location', label: `${address} (${distance}mi)` });
+            } else if (address) {
+                chips.push({ type: 'location', value: 'location', label: address });
+            }
+
+            const preset = document.getElementById('date-preset').value;
+            const start = document.getElementById('start-date').value;
+            const end = document.getElementById('end-date').value;
+            const hasDate = preset !== 'all' || start || end;
+            if (hasDate) {
+                const label = dateNote || 'Date filter';
+                chips.push({ type: 'date', value: 'date', label });
+            }
+
+            if (!chips.length) {
+                container.innerHTML = '<span class="text-xs text-burgundy-500 italic">None active</span>';
+                if (clearBtn) clearBtn.classList.add('hidden');
+                return;
+            }
+
+            container.innerHTML = chips.map(chip => {
+                const label = escapeHtml(chip.label);
+                return `
+                    <button type="button" data-type="${chip.type}" data-value="${encodeURIComponent(chip.value)}"
+                            class="library-badge inline-flex items-center gap-1.5 bg-burgundy-700 text-cream border-burgundy-800 rounded hover:bg-burgundy-800 transition-colors">
+                        <span>${label}</span>
+                        <span class="material-symbols-outlined text-xs">close</span>
+                    </button>
+                `;
+            }).join('');
+            if (clearBtn) clearBtn.classList.remove('hidden');
+        }
+
+        function handleFilterChipClick(event) {
+            const btn = event.target.closest('button[data-type]');
+            if (!btn) return;
+            const type = btn.dataset.type;
+            const value = decodeURIComponent(btn.dataset.value || '');
+
+            if (type === 'library') {
+                const target = Array.from(document.querySelectorAll('input[name="library"]')).find(cb => cb.value === value);
+                if (target) target.checked = false;
+                const remaining = getSelectedLibraries();
+                if (!remaining.length) resetLibraries();
+            } else if (type === 'age') {
+                const target = Array.from(document.querySelectorAll('input[name="type"]')).find(cb => cb.value === value);
+                if (target) target.checked = false;
+            } else if (type === 'search') {
+                const searchInput = document.getElementById('search-input');
+                if (searchInput) searchInput.value = '';
+            } else if (type === 'location') {
+                const addressInput = document.getElementById('address-input');
+                const distanceSelect = document.getElementById('distance-select');
+                if (addressInput) addressInput.value = '';
+                if (distanceSelect) distanceSelect.value = '';
+            } else if (type === 'date') {
+                const preset = document.getElementById('date-preset');
+                const start = document.getElementById('start-date');
+                const end = document.getElementById('end-date');
+                if (preset) preset.value = 'all';
+                if (start) start.value = '';
+                if (end) end.value = '';
+                const customRange = document.getElementById('custom-date-range');
+                if (customRange) customRange.classList.add('hidden');
+            }
+
+            applyFilters();
+        }
+
+        function clearAllFilters() {
+            resetLibraries();
+            document.querySelectorAll('input[name="type"]').forEach(cb => cb.checked = false);
+            const searchInput = document.getElementById('search-input');
+            if (searchInput) searchInput.value = '';
+            const addressInput = document.getElementById('address-input');
+            const distanceSelect = document.getElementById('distance-select');
+            if (addressInput) addressInput.value = '';
+            if (distanceSelect) distanceSelect.value = '';
+            const preset = document.getElementById('date-preset');
+            const start = document.getElementById('start-date');
+            const end = document.getElementById('end-date');
+            if (preset) preset.value = 'all';
+            if (start) start.value = '';
+            if (end) end.value = '';
+            const customRange = document.getElementById('custom-date-range');
+            if (customRange) customRange.classList.add('hidden');
+            applyFilters();
+        }
+
         document.addEventListener('DOMContentLoaded', function() {
-            // Initialize preset to Today if within bounds
             const preset = document.getElementById('date-preset');
             const startInput = document.getElementById('start-date');
             const endInput = document.getElementById('end-date');
@@ -280,7 +758,18 @@
                 preset.value = 'all';
             }
 
-            // Toggle custom range UI
+            setupLibraryCheckboxes();
+            document.getElementById('active-filters').addEventListener('click', handleFilterChipClick);
+            renderActiveFilters();
+            const toggleBtn = ensureProgressToggleExists();
+            let storedCollapse = false;
+            try {
+                storedCollapse = (localStorage.getItem('progressCollapsed') || 'false') === 'true';
+            } catch (e) { storedCollapse = false; }
+            setProgressCollapsed(storedCollapse);
+            const progressToggle = document.getElementById('progress-toggle');
+            if (progressToggle) progressToggle.addEventListener('click', toggleProgressCollapse);
+
             preset.addEventListener('change', function() {
                 const show = preset.value === 'custom';
                 const customRange = document.getElementById('custom-date-range');
@@ -294,14 +783,10 @@
             loadEvents().then(() => applyFilters());
             fetchProgress();
 
-            // Add enter key support for search
             document.getElementById('search-input').addEventListener('keypress', function(e) {
-                if (e.key === 'Enter') {
-                    applyFilters();
-                }
+                if (e.key === 'Enter') applyFilters();
             });
 
-            // Update last updated time
             document.getElementById('last-updated').textContent = new Date().toLocaleString();
         });
 
@@ -317,15 +802,15 @@
             } catch (error) {
                 document.getElementById('events-grid').innerHTML =
                     `<div class="col-span-full text-center py-12">
-                        <span class="material-symbols-outlined text-4xl text-red-500 mb-4 block">error</span>
-                        <p class="text-slate-600 dark:text-slate-400">Error loading events: ${error.message}</p>
+                        <span class="material-symbols-outlined text-5xl text-burgundy-500 mb-4 block">error</span>
+                        <p class="text-burgundy-700 font-medium">Error loading events: ${error.message}</p>
                     </div>`;
                 updateStatus('Error loading events');
             }
         }
 
         async function applyFilters() {
-            const library = document.getElementById('library-filter').value;
+            const libraries = getSelectedLibraries();
             const typeSelected = Array.from(document.querySelectorAll('input[name="type"]:checked')).map(cb => cb.value);
             const search = document.getElementById('search-input').value;
             const searchMode = document.getElementById('search-mode').value;
@@ -334,21 +819,32 @@
             const startInput = document.getElementById('start-date');
             const endInput = document.getElementById('end-date');
             const { startIso, endIso, note } = computeDateRange(preset, startInput.value, endInput.value);
+            const address = document.getElementById('address-input').value.trim();
+            const distance = document.getElementById('distance-select').value;
 
             updateStatus('Filtering events...');
 
             try {
-                const typeParams = typeSelected.map(t => `&type=${encodeURIComponent(t)}`).join('');
-                const fieldParams = searchFields.length ? `&search_fields=${encodeURIComponent(searchFields.join(','))}` : '';
-                const modeParam = searchMode ? `&search_mode=${encodeURIComponent(searchMode)}` : '';
-                const rangeParams = (startIso ? `&start=${encodeURIComponent(startIso)}` : '') + (endIso ? `&end=${encodeURIComponent(endIso)}` : '');
-                const url = `/api/events?library=${encodeURIComponent(library)}${typeParams}&search=${encodeURIComponent(search)}${fieldParams}${modeParam}${rangeParams}`;
+                const params = new URLSearchParams();
+                libraries.forEach(l => params.append('library', l));
+                typeSelected.forEach(t => params.append('type', t));
+                if (search) params.append('search', search);
+                if (searchMode) params.append('search_mode', searchMode);
+                if (searchFields.length) params.append('search_fields', searchFields.join(','));
+                if (startIso) params.append('start', startIso);
+                if (endIso) params.append('end', endIso);
+                if (address) params.append('address', address);
+                if (distance) params.append('distance', distance);
+
+                const query = params.toString();
+                const url = query ? `/api/events?${query}` : '/api/events';
                 const response = await fetch(url);
                 const data = await response.json();
                 filteredEvents = data.events;
                 displayEvents(filteredEvents);
                 const dateNote = note ? ` ${note}` : '';
                 updateStatus(`Showing ${data.total} of ${allEvents.length} events${dateNote}`);
+                renderActiveFilters(note);
             } catch (error) {
                 updateStatus('Error filtering events');
             }
@@ -358,10 +854,8 @@
             const today = new Date();
             const toISO = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
             let start = null, end = null, note = '';
-            const dow = today.getDay(); // 0=Sun..6=Sat
-            if (preset === 'all') {
-                return { startIso: '', endIso: '', note: '' };
-            }
+            const dow = today.getDay();
+            if (preset === 'all') return { startIso: '', endIso: '', note: '' };
             if (preset === 'today') {
                 start = new Date(today); end = new Date(today);
                 note = `on ${toISO(start)}`;
@@ -375,16 +869,13 @@
                 start = new Date(today); end = new Date(today); end.setDate(end.getDate()+13);
                 note = `from ${toISO(start)} to ${toISO(end)}`;
             } else if (preset === 'thisweek') {
-                // Sunday-Saturday
                 start = new Date(today); start.setDate(start.getDate() - dow);
                 end = new Date(start); end.setDate(start.getDate()+6);
                 note = `this week (${toISO(start)} to ${toISO(end)})`;
             } else if (preset === 'weekend') {
-                // Upcoming Fri-Sun (if already weekend, use current Fri-Sun)
                 const daysUntilFri = (5 - dow + 7) % 7;
                 start = new Date(today); start.setDate(start.getDate() + daysUntilFri);
                 end = new Date(start); end.setDate(start.getDate() + 2);
-                // If today is Sun (0), daysUntilFri=5 ⇒ next weekend; that's fine
                 note = `weekend (${toISO(start)} to ${toISO(end)})`;
             } else if (preset === 'thismonth') {
                 start = new Date(today.getFullYear(), today.getMonth(), 1);
@@ -406,9 +897,10 @@
 
             if (events.length === 0) {
                 grid.innerHTML = `
-                    <div class="col-span-full text-center py-12">
-                        <span class="material-symbols-outlined text-4xl text-slate-400 mb-4 block">search_off</span>
-                        <p class="text-slate-600 dark:text-slate-400">No events found matching your criteria.</p>
+                    <div class="col-span-full text-center py-16">
+                        <span class="material-symbols-outlined text-6xl text-burgundy-400 mb-4 block">search_off</span>
+                        <p class="text-xl font-display font-semibold text-burgundy-800 mb-2">No events found</p>
+                        <p class="text-burgundy-600">Try adjusting your filters</p>
                     </div>`;
                 return;
             }
@@ -418,48 +910,64 @@
                 const ageColor = getAgeGroupColor(ageGroup);
 
                 return `
-                    <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 shadow-sm hover:shadow-md transition-shadow duration-200">
-                        <div class="flex justify-between items-start mb-4">
-                            <h3 class="text-lg font-semibold text-slate-900 dark:text-slate-100 leading-tight pr-4">
-                                ${escapeHtml(event.Title || 'Untitled Event')}
-                            </h3>
-                            <span class="px-3 py-1 bg-primary/10 text-primary text-xs font-medium rounded-full whitespace-nowrap">
-                                ${escapeHtml(event.Library || 'Unknown')}
-                            </span>
-                        </div>
+                    <div class="event-card relative bg-cream border-2 border-burgundy-300 rounded-xl p-6 pt-8 shadow-md">
+                        <div class="card-tab">${escapeHtml(event.Library || 'Unknown')}</div>
 
-                        <div class="space-y-3 mb-4">
-                            <div class="flex items-center text-sm text-slate-600 dark:text-slate-400">
-                                <span class="material-symbols-outlined text-lg mr-3 text-slate-400">event</span>
-                                ${escapeHtml(event.Date || 'Date TBD')}
+                        <h3 class="text-xl font-display font-bold text-burgundy-900 mb-4 leading-tight">
+                            ${escapeHtml(event.Title || 'Untitled Event')}
+                        </h3>
+
+                        <div class="space-y-2.5 mb-4">
+                            <div class="flex items-center text-sm text-burgundy-800">
+                                <span class="material-symbols-outlined text-base mr-2.5 text-amber-600">event</span>
+                                <span class="font-medium">${escapeHtml(event.Date || 'Date TBD')}</span>
                             </div>
-                            <div class="flex items-center text-sm text-slate-600 dark:text-slate-400">
-                                <span class="material-symbols-outlined text-lg mr-3 text-slate-400">schedule</span>
-                                ${escapeHtml(event.Time || 'Time TBD')}
+                            <div class="flex items-center text-sm text-burgundy-800">
+                                <span class="material-symbols-outlined text-base mr-2.5 text-amber-600">schedule</span>
+                                <span class="font-medium">${escapeHtml(event.Time || 'Time TBD')}</span>
                             </div>
-                            <div class="flex items-center text-sm text-slate-600 dark:text-slate-400">
-                                <span class="material-symbols-outlined text-lg mr-3 text-slate-400">location_on</span>
-                                ${escapeHtml(event.Location || 'Location TBD')}
+                            <div class="flex items-center text-sm text-burgundy-800">
+                                <span class="material-symbols-outlined text-base mr-2.5 text-amber-600">location_on</span>
+                                <span class="font-medium">${escapeHtml(event.Location || 'Location TBD')}</span>
                             </div>
-                            <div class="flex items-center text-sm text-slate-600 dark:text-slate-400">
-                                <span class="material-symbols-outlined text-lg mr-3 text-slate-400">group</span>
-                                <span class="px-2 py-1 ${ageColor} text-xs font-medium rounded">
+                            <div class="flex items-center text-sm text-burgundy-800">
+                                <span class="material-symbols-outlined text-base mr-2.5 text-amber-600">group</span>
+                                <span class="px-2.5 py-1 ${ageColor} text-xs font-bold rounded-md">
                                     ${escapeHtml(ageGroup)}
                                 </span>
                             </div>
+                            ${event._distance !== undefined ? `
+                            <div class="flex items-center text-sm text-burgundy-800">
+                                <span class="material-symbols-outlined text-base mr-2.5 text-sage-700">near_me</span>
+                                <span class="px-2.5 py-1 bg-sage-100 text-sage-800 border border-sage-300 text-xs font-bold rounded-md">
+                                    ${event._distance} miles away
+                                </span>
+                            </div>
+                            ` : ''}
                         </div>
 
+                        ${event.AI_Summary ?
+                            `<div class="mb-4 p-3 bg-amber-50 border border-amber-300 rounded-lg">
+                                <div class="flex items-center gap-2 mb-2">
+                                    <span class="material-symbols-outlined text-sm text-amber-700">auto_awesome</span>
+                                    <span class="text-xs font-bold text-amber-800 uppercase tracking-wide">AI Summary</span>
+                                </div>
+                                <p class="text-sm text-burgundy-800 italic leading-relaxed">
+                                    ${escapeHtml(event.AI_Summary)}
+                                </p>
+                            </div>` : ''}
+
                         ${event.Description && event.Description !== 'Not found' ?
-                            `<p class="text-sm text-slate-600 dark:text-slate-400 mb-4 line-clamp-3">
+                            `<p class="text-sm text-burgundy-700 mb-4 leading-relaxed line-clamp-3">
                                 ${escapeHtml(event.Description)}
                             </p>` : ''}
 
                         ${event.Link && event.Link !== 'N/A' && event.Link !== '' ?
-                            `<div class="pt-3 border-t border-slate-200 dark:border-slate-700">
+                            `<div class="pt-4 border-t-2 border-burgundy-200 mt-4">
                                 <a href="${escapeHtml(event.Link)}"
                                    target="_blank"
                                    rel="noopener"
-                                   class="inline-flex items-center gap-2 text-primary hover:text-blue-700 font-medium text-sm transition-colors">
+                                   class="inline-flex items-center gap-2 text-burgundy-800 hover:text-burgundy-600 font-bold text-sm transition-colors underline">
                                     <span>More Information</span>
                                     <span class="material-symbols-outlined text-sm">open_in_new</span>
                                 </a>
@@ -470,30 +978,32 @@
 
         function getAgeGroupColor(ageGroup) {
             const colors = {
-                'Baby/Toddler': 'bg-pink-100 text-pink-700 dark:bg-pink-900 dark:text-pink-300',
-                'Preschool/Early Elementary': 'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300',
-                'Elementary': 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300',
-                'Middle School/Teen': 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300',
-                'Teen/Young Adult': 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300',
-                'Adult': 'bg-gray-100 text-gray-700 dark:bg-gray-900 dark:text-gray-300',
-                'Family/All Ages': 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300',
-                'Kids': 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300'
+                'Baby/Toddler': 'age-baby',
+                'Preschool/Early Elementary': 'age-preschool',
+                'Elementary': 'age-elementary',
+                'Middle School/Teen': 'age-middle',
+                'Teen/Young Adult': 'age-teen',
+                'Adult': 'age-adult',
+                'Family/All Ages': 'age-family',
+                'Kids': 'age-kids'
             };
-            return colors[ageGroup] || 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300';
+            return colors[ageGroup] || 'bg-parchment text-burgundy-800 border border-burgundy-300';
         }
 
         async function downloadICS() {
             const params = getCurrentFilterParams();
-            window.location.href = `/api/ics?${params}`;
+            const url = params ? `/api/ics?${params}` : '/api/ics';
+            window.location.href = url;
         }
 
         async function downloadPDF() {
             const params = getCurrentFilterParams();
-            window.location.href = `/api/pdf?${params}`;
+            const url = params ? `/api/pdf?${params}` : '/api/pdf';
+            window.location.href = url;
         }
 
         function getCurrentFilterParams() {
-            const library = document.getElementById('library-filter').value;
+            const libraries = getSelectedLibraries();
             const typeSelected = Array.from(document.querySelectorAll('input[name="type"]:checked')).map(cb => cb.value);
             const search = document.getElementById('search-input').value;
             const searchMode = document.getElementById('search-mode').value;
@@ -502,26 +1012,30 @@
             const startInput = document.getElementById('start-date');
             const endInput = document.getElementById('end-date');
             const { startIso, endIso } = computeDateRange(preset, startInput.value, endInput.value);
+            const address = document.getElementById('address-input').value.trim();
+            const distance = document.getElementById('distance-select').value;
 
             const params = new URLSearchParams();
-            if (library !== 'All') params.append('library', library);
+            libraries.forEach(l => params.append('library', l));
             typeSelected.forEach(t => params.append('type', t));
             if (search) params.append('search', search);
             if (searchMode) params.append('search_mode', searchMode);
             if (searchFields.length) params.append('search_fields', searchFields.join(','));
             if (startIso) params.append('start', startIso);
             if (endIso) params.append('end', endIso);
+            if (address) params.append('address', address);
+            if (distance) params.append('distance', distance);
 
             return params.toString();
         }
 
         async function refreshData() {
-            updateStatus('Starting scraper... This runs in the background.');
+            updateStatus('Starting scraper...');
             const refreshBtn = document.getElementById('refresh-btn');
             const originalText = refreshBtn.innerHTML;
             refreshBtn.innerHTML = `
-                <div class="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full"></div>
-                Refreshing...
+                <div class="animate-spin w-4 h-4 border-2 border-cream border-t-transparent rounded-full"></div>
+                Working...
             `;
             refreshBtn.disabled = true;
 
@@ -538,12 +1052,12 @@
                     awaitingRefreshData = true;
                     startProgressPolling();
                     fetchProgress(true);
-                    updateStatus('A scrape is already running. Tracking progress...');
+                    updateStatus('Scrape already running. Tracking...');
                 } else {
                     updateStatus('Error: ' + result.message);
                 }
             } catch (error) {
-                updateStatus('Error refreshing data: ' + error.message);
+                updateStatus('Error: ' + error.message);
             } finally {
                 refreshBtn.disabled = false;
                 refreshBtn.innerHTML = originalText;
@@ -573,7 +1087,7 @@
             const metaEl = document.getElementById('progress-meta');
 
             if (!data || !data.summary) {
-                summaryEl.innerHTML = '<span class="text-xs text-slate-500 dark:text-slate-400">No progress available yet.</span>';
+                summaryEl.innerHTML = '<span class="text-xs text-burgundy-500 italic">No progress data</span>';
                 gridEl.innerHTML = '';
                 return;
             }
@@ -588,29 +1102,31 @@
             const events = summary.events ?? '—';
             const message = summary.message || '';
 
-            metaEl.textContent = `${stateLabel(state)}${updated ? ` • Updated ${new Date(updated).toLocaleTimeString()}` : ''}`;
+            metaEl.textContent = `${stateLabel(state)}${updated ? ` • ${new Date(updated).toLocaleTimeString()}` : ''}`;
 
             summaryEl.innerHTML = `
                 <span class="${stateBadgeClass(state)}">${stateLabel(state)}</span>
-                <span class="text-xs text-slate-600 dark:text-slate-400">Sources: ${succeeded}/${totalSources}${failed ? `, ${failed} failed` : ''}</span>
-                <span class="text-xs text-slate-600 dark:text-slate-400">Events: ${events}</span>
-                ${message ? `<span class="text-xs text-slate-500 dark:text-slate-400">${escapeHtml(message)}</span>` : ''}
+                <span class="text-xs text-burgundy-700 font-semibold">Sources: ${succeeded}/${totalSources}${failed ? `, ${failed} failed` : ''}</span>
+                <span class="text-xs text-burgundy-700 font-semibold">Events: ${events}</span>
+                ${message ? `<span class="text-xs text-burgundy-600">${escapeHtml(message)}</span>` : ''}
             `;
 
             if (!totalSources) {
-                gridEl.innerHTML = `<div class="text-sm text-slate-600 dark:text-slate-400">No runs yet.</div>`;
+                gridEl.innerHTML = `<div class="text-sm text-burgundy-600 italic">No runs yet.</div>`;
             } else {
                 gridEl.innerHTML = Object.entries(sources).map(([name, payload]) => {
                     const srcState = (payload.state || 'pending').toLowerCase();
                     const count = payload.count ?? '—';
-                    const msg = payload.message ? `<div class="text-xs text-slate-500 dark:text-slate-400 mt-1">${escapeHtml(payload.message)}</div>` : '';
+                    const msg = payload.message ? `<div class="text-xs text-burgundy-600 mt-1">${escapeHtml(payload.message)}</div>` : '';
+                    const address = payload.address ? `<div class="text-xs text-burgundy-600 mt-1"><span class="material-symbols-outlined text-xs mr-1">location_on</span>${escapeHtml(payload.address)}</div>` : '';
                     return `
-                        <div class="border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-900 p-3 shadow-sm">
+                        <div class="border-2 border-burgundy-300 rounded-lg bg-cream p-3 shadow-sm">
                             <div class="flex items-center justify-between mb-1">
-                                <span class="text-sm font-semibold text-slate-800 dark:text-slate-100">${escapeHtml(name)}</span>
+                                <span class="text-sm font-bold text-burgundy-900">${escapeHtml(name)}</span>
                                 <span class="${stateBadgeClass(srcState)}">${stateLabel(srcState)}</span>
                             </div>
-                            <div class="text-xs text-slate-600 dark:text-slate-400">Events: ${count}</div>
+                            <div class="text-xs text-burgundy-700 font-semibold">Events: ${count}</div>
+                            ${address}
                             ${msg}
                         </div>
                     `;
@@ -623,7 +1139,7 @@
                 loadEvents().then(() => {
                     document.getElementById('last-updated').textContent = new Date().toLocaleString();
                 });
-                updateStatus(state === 'error' ? 'Scrape failed. Showing last available data.' : 'Scrape finished. Reloaded events.');
+                updateStatus(state === 'error' ? 'Scrape failed.' : 'Scrape complete!');
                 stopProgressPolling();
             }
 
@@ -650,7 +1166,7 @@
                 running: 'Running',
                 success: 'Done',
                 completed: 'Completed',
-                completed_with_errors: 'Completed (with issues)',
+                completed_with_errors: 'Partial',
                 degraded: 'Partial',
                 error: 'Error'
             };
@@ -658,18 +1174,18 @@
         }
 
         function stateBadgeClass(state) {
-            const base = "inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full font-semibold";
+            const base = "inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded font-bold uppercase tracking-wide border";
             const styles = {
-                pending: `${base} bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200`,
-                queued: `${base} bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200`,
-                running: `${base} bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200`,
-                success: `${base} bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200`,
-                completed: `${base} bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200`,
-                completed_with_errors: `${base} bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200`,
-                degraded: `${base} bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200`,
-                error: `${base} bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-200`
+                pending: `${base} bg-burgundy-100 text-burgundy-700 border-burgundy-300`,
+                queued: `${base} bg-burgundy-100 text-burgundy-700 border-burgundy-300`,
+                running: `${base} bg-amber-100 text-amber-800 border-amber-400`,
+                success: `${base} bg-sage-100 text-sage-800 border-sage-400`,
+                completed: `${base} bg-sage-100 text-sage-800 border-sage-400`,
+                completed_with_errors: `${base} bg-amber-100 text-amber-800 border-amber-400`,
+                degraded: `${base} bg-amber-100 text-amber-800 border-amber-400`,
+                error: `${base} bg-burgundy-200 text-burgundy-900 border-burgundy-500`
             };
-            return styles[state] || `${base} bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200`;
+            return styles[state] || `${base} bg-parchment text-burgundy-700 border-burgundy-300`;
         }
 
         function updateStatus(message) {

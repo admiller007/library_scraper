@@ -1,0 +1,101 @@
+{
+  "started_at": "2025-12-29T18:22:39.791617+00:00",
+  "updated_at": "2025-12-29T18:26:12.187656+00:00",
+  "sources": {
+    "Lincolnwood": {
+      "state": "success",
+      "count": 27,
+      "message": ""
+    },
+    "Morton Grove (MGPL)": {
+      "state": "success",
+      "count": 26,
+      "message": ""
+    },
+    "Glencoe": {
+      "state": "success",
+      "count": 153,
+      "message": ""
+    },
+    "Glencoe Park District": {
+      "state": "success",
+      "count": 14,
+      "message": ""
+    },
+    "Evanston": {
+      "state": "success",
+      "count": 100,
+      "message": ""
+    },
+    "CPL Edgebrook": {
+      "state": "success",
+      "count": 34,
+      "message": ""
+    },
+    "CPL Budlong Woods": {
+      "state": "success",
+      "count": 100,
+      "message": ""
+    },
+    "Wilmette": {
+      "state": "success",
+      "count": 230,
+      "message": ""
+    },
+    "Skokie Library": {
+      "state": "success",
+      "count": 23,
+      "message": ""
+    },
+    "Skokie Parks": {
+      "state": "success",
+      "count": 200,
+      "message": ""
+    },
+    "Chicago Parks": {
+      "state": "success",
+      "count": 131,
+      "message": ""
+    },
+    "Forest Preserves": {
+      "state": "success",
+      "count": 284,
+      "message": ""
+    },
+    "Niles": {
+      "state": "success",
+      "count": 217,
+      "message": ""
+    },
+    "Des Plaines": {
+      "state": "success",
+      "count": 304,
+      "message": ""
+    },
+    "Park Ridge": {
+      "state": "success",
+      "count": 0,
+      "message": ""
+    },
+    "Hoffman Estates": {
+      "state": "success",
+      "count": 65,
+      "message": ""
+    },
+    "Kohl Children's Museum": {
+      "state": "success",
+      "count": 282,
+      "message": ""
+    }
+  },
+  "summary": {
+    "state": "completed",
+    "total_sources": 17,
+    "succeeded": 17,
+    "failed": 0,
+    "running": 0,
+    "pending": 0,
+    "events": 2084,
+    "message": "Scrape finished"
+  }
+}
