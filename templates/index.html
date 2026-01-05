@@ -58,9 +58,9 @@
                 <span class="material-symbols-outlined text-primary text-2xl">local_library</span>
                 <div>
                     <h1 class="text-slate-800 dark:text-slate-200 text-xl font-bold">Chicago Library Events</h1>
-                    <p class="text-slate-600 dark:text-slate-400 text-sm">
-                        Total Events: {{ total_events }}
-                        {% if csv_file %}• Loaded from: {{ csv_file }}{% endif %}
+                    <p id="header-stats" class="text-slate-600 dark:text-slate-400 text-sm">
+                        Total Events: <span id="total-events-count">{{ total_events }}</span>
+                        {% if csv_file %}• Loaded from: <span id="csv-filename">{{ csv_file }}</span>{% endif %}
                     </p>
                 </div>
             </div>
@@ -301,6 +301,8 @@
         let lastProgressState = 'idle';
         let lastEventsTotal = 0;
         let lastDataLoadTs = null;
+        let refreshStartedAt = null;  // Track when refresh was initiated
+        let lastDataLoadedAt = null;  // Track last data_loaded_at to detect changes
 
         // Load events on page load
         document.addEventListener('DOMContentLoaded', function() {
@@ -380,6 +382,9 @@
                 lastDataLoadTs = Date.now();
                 displayEvents(allEvents);
                 updateStatus(`Showing ${data.total} events`);
+                // Update header count
+                const totalCountEl = document.getElementById('total-events-count');
+                if (totalCountEl) totalCountEl.textContent = data.total;
             } catch (error) {
                 document.getElementById('events-grid').innerHTML =
                     `<div class="col-span-full text-center py-12">
@@ -612,11 +617,13 @@
 
                 if (response.ok && result.success) {
                     awaitingRefreshData = true;
+                    refreshStartedAt = new Date().toISOString();  // Track when refresh started
                     startProgressPolling();
                     fetchProgress(true);
                     updateStatus('Scraper started. Tracking progress...');
                 } else if (result.running) {
                     awaitingRefreshData = true;
+                    refreshStartedAt = refreshStartedAt || new Date().toISOString();  // Keep existing if set
                     startProgressPolling();
                     fetchProgress(true);
                     updateStatus('A scrape is already running. Tracking progress...');
@@ -699,16 +706,35 @@
             }
 
             const finishedStates = ['completed', 'completed_with_errors', 'error'];
-            if (finishedStates.includes(state) && state !== lastProgressState) {
+            const dataLoadedAt = data.data_loaded_at;
+            // Only reload events if data_loaded_at is set and is newer than when we started the refresh
+            // This ensures the backend has actually loaded the new CSV into memory
+            const dataIsReady = !refreshStartedAt || (dataLoadedAt && new Date(dataLoadedAt + 'Z') >= new Date(refreshStartedAt));
+            // Check if data_loaded_at changed (new data available)
+            const dataLoadedAtChanged = dataLoadedAt && dataLoadedAt !== lastDataLoadedAt;
+
+            // Trigger reload when: state is finished AND (state just changed OR data_loaded_at just changed) AND data is ready
+            const shouldReload = finishedStates.includes(state) &&
+                                 (state !== lastProgressState || dataLoadedAtChanged) &&
+                                 dataIsReady;
+
+            if (shouldReload) {
                 awaitingRefreshData = false;
+                refreshStartedAt = null;  // Reset for next refresh
                 loadEvents().then(() => {
                     document.getElementById('last-updated').textContent = new Date().toLocaleString();
+                    // Re-apply filters to newly loaded data
+                    applyFilters();
                 });
                 updateStatus(state === 'error' ? 'Scrape failed. Showing last available data.' : 'Scrape finished. Reloaded events.');
                 stopProgressPolling();
+            } else if (finishedStates.includes(state) && !dataIsReady) {
+                // Scrape finished but data not yet loaded - keep polling
+                updateStatus('Scrape finished. Loading data...');
             }
 
             lastProgressState = state;
+            lastDataLoadedAt = dataLoadedAt;
         }
 
         function startProgressPolling() {

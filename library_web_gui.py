@@ -681,9 +681,22 @@ def run_scraper_background():
         )
         if result.returncode == 0:
             load_latest_csv()
-            # If the scraper did not emit a progress file, provide a minimal success snapshot
-            if not PROGRESS_FILE.exists():
-                write_progress_stub("completed", f"Scrape finished with {len(events_data)} events")
+            # Update progress with data_loaded_at timestamp to signal frontend that data is ready
+            # This timestamp is the key signal - it's only set AFTER load_latest_csv() completes
+            try:
+                payload = read_progress_file()
+                now = datetime.utcnow().isoformat()
+                payload["updated_at"] = now
+                payload["data_loaded_at"] = now  # This signals data is actually loaded
+                payload["summary"] = {
+                    **payload.get("summary", {}),
+                    "state": "completed",
+                    "message": f"Scrape finished with {len(events_data)} events",
+                    "events": len(events_data),
+                }
+                PROGRESS_FILE.write_text(json.dumps(payload, indent=2))
+            except Exception as exc:
+                print(f"Failed to update progress after load: {exc}")
         else:
             msg = (result.stderr or result.stdout or "Unknown error").strip()
             write_progress_stub("error", f"Scraper failed: {msg[:500]}")
