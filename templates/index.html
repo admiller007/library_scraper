@@ -301,6 +301,7 @@
         let lastProgressState = 'idle';
         let lastEventsTotal = 0;
         let lastDataLoadTs = null;
+        let refreshStartedAt = null;  // Track when refresh was initiated
 
         // Load events on page load
         document.addEventListener('DOMContentLoaded', function() {
@@ -612,11 +613,13 @@
 
                 if (response.ok && result.success) {
                     awaitingRefreshData = true;
+                    refreshStartedAt = new Date().toISOString();  // Track when refresh started
                     startProgressPolling();
                     fetchProgress(true);
                     updateStatus('Scraper started. Tracking progress...');
                 } else if (result.running) {
                     awaitingRefreshData = true;
+                    refreshStartedAt = refreshStartedAt || new Date().toISOString();  // Keep existing if set
                     startProgressPolling();
                     fetchProgress(true);
                     updateStatus('A scrape is already running. Tracking progress...');
@@ -699,13 +702,24 @@
             }
 
             const finishedStates = ['completed', 'completed_with_errors', 'error'];
-            if (finishedStates.includes(state) && state !== lastProgressState) {
+            const dataLoadedAt = data.data_loaded_at;
+            // Only reload events if data_loaded_at is set and is newer than when we started the refresh
+            // This ensures the backend has actually loaded the new CSV into memory
+            const dataIsReady = !refreshStartedAt || (dataLoadedAt && new Date(dataLoadedAt) >= new Date(refreshStartedAt));
+
+            if (finishedStates.includes(state) && state !== lastProgressState && dataIsReady) {
                 awaitingRefreshData = false;
+                refreshStartedAt = null;  // Reset for next refresh
                 loadEvents().then(() => {
                     document.getElementById('last-updated').textContent = new Date().toLocaleString();
+                    // Re-apply filters to newly loaded data
+                    applyFilters();
                 });
                 updateStatus(state === 'error' ? 'Scrape failed. Showing last available data.' : 'Scrape finished. Reloaded events.');
                 stopProgressPolling();
+            } else if (finishedStates.includes(state) && !dataIsReady) {
+                // Scrape finished but data not yet loaded - keep polling
+                updateStatus('Scrape finished. Loading data...');
             }
 
             lastProgressState = state;
