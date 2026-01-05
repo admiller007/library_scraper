@@ -124,6 +124,38 @@
                     </div>
                 </div>
 
+                <!-- Time of Day Filter -->
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Time of Day</label>
+                    <div class="border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 p-3 checkbox-container">
+                        <label class="flex items-center text-sm text-slate-700 dark:text-slate-300 mb-2 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 px-2 py-1 rounded">
+                            <input type="checkbox" name="time_of_day" value="morning"
+                                   class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary mr-2">
+                            <span class="truncate">Morning</span>
+                        </label>
+                        <label class="flex items-center text-sm text-slate-700 dark:text-slate-300 mb-2 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 px-2 py-1 rounded">
+                            <input type="checkbox" name="time_of_day" value="afternoon"
+                                   class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary mr-2">
+                            <span class="truncate">Afternoon</span>
+                        </label>
+                        <label class="flex items-center text-sm text-slate-700 dark:text-slate-300 mb-2 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 px-2 py-1 rounded">
+                            <input type="checkbox" name="time_of_day" value="evening"
+                                   class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary mr-2">
+                            <span class="truncate">Evening</span>
+                        </label>
+                        <label class="flex items-center text-sm text-slate-700 dark:text-slate-300 mb-2 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 px-2 py-1 rounded">
+                            <input type="checkbox" name="time_of_day" value="night"
+                                   class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary mr-2">
+                            <span class="truncate">Night</span>
+                        </label>
+                        <label class="flex items-center text-sm text-slate-700 dark:text-slate-300 mb-2 last:mb-0 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 px-2 py-1 rounded">
+                            <input type="checkbox" name="time_of_day" value="all_day"
+                                   class="w-4 h-4 text-primary border-slate-300 rounded focus:ring-primary mr-2">
+                            <span class="truncate">All Day / Time TBD</span>
+                        </label>
+                    </div>
+                </div>
+
                 <!-- Search -->
                 <div class="space-y-2">
                     <div>
@@ -364,6 +396,7 @@
                 .filter(cb => cb.value !== 'All')
                 .map(cb => cb.value);
             const typeSelected = Array.from(document.querySelectorAll('input[name="type"]:checked')).map(cb => cb.value);
+            const timeOfDaySelected = Array.from(document.querySelectorAll('input[name="time_of_day"]:checked')).map(cb => cb.value);
             const search = document.getElementById('search-input').value;
             const searchMode = document.getElementById('search-mode').value;
             const searchFields = Array.from(document.querySelectorAll('input[name="search-field"]:checked')).map(cb => cb.value);
@@ -378,6 +411,7 @@
                 const params = new URLSearchParams();
                 librarySelected.forEach(l => params.append('library', l));
                 typeSelected.forEach(t => params.append('type', t));
+                timeOfDaySelected.forEach(t => params.append('time_of_day', t));
                 if (search) params.append('search', search);
                 if (searchMode) params.append('search_mode', searchMode);
                 if (searchFields.length) params.append('search_fields', searchFields.join(','));
@@ -540,6 +574,7 @@
                 .filter(cb => cb.value !== 'All')
                 .map(cb => cb.value);
             const typeSelected = Array.from(document.querySelectorAll('input[name="type"]:checked')).map(cb => cb.value);
+            const timeOfDaySelected = Array.from(document.querySelectorAll('input[name="time_of_day"]:checked')).map(cb => cb.value);
             const search = document.getElementById('search-input').value;
             const searchMode = document.getElementById('search-mode').value;
             const searchFields = Array.from(document.querySelectorAll('input[name="search-field"]:checked')).map(cb => cb.value);
@@ -551,6 +586,7 @@
             const params = new URLSearchParams();
             librarySelected.forEach(l => params.append('library', l));
             typeSelected.forEach(t => params.append('type', t));
+            timeOfDaySelected.forEach(t => params.append('time_of_day', t));
             if (search) params.append('search', search);
             if (searchMode) params.append('search_mode', searchMode);
             if (searchFields.length) params.append('search_fields', searchFields.join(','));
