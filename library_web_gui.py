@@ -81,9 +81,44 @@ def parse_time_to_sortable(time_str: str) -> datetime.time:
         return datetime.min.time()
 
 
+def get_time_of_day_bucket(time_str: str) -> str:
+    """Bucket event times into time-of-day categories."""
+    if not isinstance(time_str, str) or not time_str.strip():
+        return "all_day"
+
+    raw = time_str.strip().lower()
+    if "all day" in raw:
+        return "all_day"
+
+    raw = raw.split('@')[-1]
+    raw = re.split(r'–|-', raw)[0].strip()
+    if not raw:
+        return "all_day"
+
+    cleaned = raw.replace(".", "")
+    for fmt in ("%I:%M %p", "%I %p", "%I:%M%p", "%I%p", "%H:%M", "%H%M"):
+        try:
+            parsed = datetime.strptime(cleaned, fmt).time()
+            break
+        except ValueError:
+            parsed = None
+    if parsed is None:
+        return "all_day"
+
+    hour = parsed.hour
+    if 5 <= hour < 12:
+        return "morning"
+    if 12 <= hour < 17:
+        return "afternoon"
+    if 17 <= hour < 21:
+        return "evening"
+    return "night"
+
+
 def filter_events(
     library_filters=None,
     type_filters=None,
+    time_of_day_filters=None,
     search_term='',
     start_date='',
     end_date='',
@@ -94,6 +129,7 @@ def filter_events(
     """Apply shared filtering logic used by both JSON API and ICS export."""
     library_filters = library_filters or []
     type_filters = type_filters or []
+    time_of_day_filters = time_of_day_filters or []
     filtered_events = events_data.copy()
     search_mode = (search_mode or 'any').lower()
     allowed_modes = {'any', 'all', 'exact', 'fuzzy'}
@@ -114,6 +150,14 @@ def filter_events(
             return set(parts) if parts else {raw} if raw else set()
 
         filtered_events = [e for e in filtered_events if get_event_types(e) & selected]
+
+    # Apply time-of-day filters
+    if time_of_day_filters:
+        selected = {t.strip().lower() for t in time_of_day_filters if (t or '').strip()}
+        filtered_events = [
+            e for e in filtered_events
+            if get_time_of_day_bucket(e.get('Time') or '') in selected
+        ]
 
     # Apply search filter with configurable fields and modes
     if search_term:
@@ -482,6 +526,7 @@ def get_events():
     library_filters = [l.strip() for l in request.args.getlist('library') if (l or '').strip()]
     # Support multiple `type` params, e.g., ?type=A&type=B
     type_filters = [t.strip() for t in request.args.getlist('type') if (t or '').strip()]
+    time_of_day_filters = [t.strip() for t in request.args.getlist('time_of_day') if (t or '').strip()]
     search_term = request.args.get('search', '').lower().strip()
     date_filter = request.args.get('date', '').strip()  # legacy single date YYYY-MM-DD
     start_date = request.args.get('start', '').strip()  # YYYY-MM-DD
@@ -492,6 +537,7 @@ def get_events():
     filtered_events = filter_events(
         library_filters=library_filters,
         type_filters=type_filters,
+        time_of_day_filters=time_of_day_filters,
         search_term=search_term,
         start_date=start_date,
         end_date=end_date,
@@ -511,6 +557,7 @@ def download_ics():
     """Download an ICS file for all or filtered events using the same filters as /api/events."""
     library_filters = [l.strip() for l in request.args.getlist('library') if (l or '').strip()]
     type_filters = [t.strip() for t in request.args.getlist('type') if (t or '').strip()]
+    time_of_day_filters = [t.strip() for t in request.args.getlist('time_of_day') if (t or '').strip()]
     search_term = request.args.get('search', '').lower().strip()
     date_filter = request.args.get('date', '').strip()
     start_date = request.args.get('start', '').strip()
@@ -521,6 +568,7 @@ def download_ics():
     filtered_events = filter_events(
         library_filters=library_filters,
         type_filters=type_filters,
+        time_of_day_filters=time_of_day_filters,
         search_term=search_term,
         start_date=start_date,
         end_date=end_date,
@@ -554,6 +602,7 @@ def download_pdf():
     """Download a PDF organized by day, then library, then time, honoring any filters."""
     library_filters = [l.strip() for l in request.args.getlist('library') if (l or '').strip()]
     type_filters = [t.strip() for t in request.args.getlist('type') if (t or '').strip()]
+    time_of_day_filters = [t.strip() for t in request.args.getlist('time_of_day') if (t or '').strip()]
     search_term = request.args.get('search', '').lower().strip()
     date_filter = request.args.get('date', '').strip()
     start_date = request.args.get('start', '').strip()
@@ -564,6 +613,7 @@ def download_pdf():
     filtered_events = filter_events(
         library_filters=library_filters,
         type_filters=type_filters,
+        time_of_day_filters=time_of_day_filters,
         search_term=search_term,
         start_date=start_date,
         end_date=end_date,

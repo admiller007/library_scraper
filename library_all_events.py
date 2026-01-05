@@ -12,6 +12,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from pathlib import Path
+from urllib.parse import urljoin
 from bs4 import BeautifulSoup, FeatureNotFound
 from bs4 import BeautifulSoup
 try:
@@ -71,12 +72,23 @@ LINCOLNWOOD_DATE_REGEX = r'\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturda
 MGPL_URL = 'https://www.mgpl.org/events/list'  # Remove age group filter
 EVANSTON_BASE_URL = 'https://evanstonlibrary.bibliocommons.com/v2/events'
 CPL_BASE_URL = 'https://chipublib.bibliocommons.com/v2/events'
+GLENVIEW_BASE_URL = 'https://glenviewpl.bibliocommons.com/v2/events'
 GLENCOE_AJAX_URL = "https://calendar.glencoelibrary.org/ajax/calendar/list"
 GLENCOE_CALENDAR_ID = "19721"
 SKOKIE_PARKS_URL = "https://www.skokieparks.org/events/"
 SKOKIE_PARKS_BASE = "https://www.skokieparks.org"
 FPDCC_EVENTS_API = "https://fpdcc.com/wp-json/tribe/events/v1/events"
 CHICAGO_PARKS_URL = "https://www.chicagoparkdistrict.com/events"
+WNPLD_BASE_URL = "https://www.wnpld.org"
+WNPLD_EVENTS_URL = f"{WNPLD_BASE_URL}/events/upcoming"
+WNPLD_MAX_PAGES = 12
+WNPLD_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/121.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 # Pre-compiled regex patterns for performance
 COMPILED_PATTERNS = {
@@ -110,6 +122,8 @@ CPD_SEM = asyncio.Semaphore(CPD_CONCURRENCY)
 
 # Global session for connection pooling
 _http_session = None
+WNPLD_CACHE: Optional[List[Dict[str, Any]]] = None
+WNPLD_CACHE_LOCK = asyncio.Lock()
 
 # --- PROGRESS TRACKING ---
 PROGRESS_FILE = DATA_DIR / "scrape_progress.json"
@@ -120,12 +134,19 @@ PROGRESS_SOURCES = [
     "Evanston",
     "CPL Edgebrook",
     "CPL Budlong Woods",
+    "CPL Albany Park",
+    "CPL Northtown",
+    "CPL Rogers Park",
+    "Glenview",
     "Wilmette",
     "Skokie Library",
     "Skokie Parks",
     "Chicago Parks",
     "Forest Preserves",
-    "Niles"
+    "Niles",
+    "Northbrook",
+    "Winnetka",
+    "Northfield"
 ]
 progress_state: Dict[str, Any] = {}
 progress_lock = asyncio.Lock()
@@ -1010,6 +1031,174 @@ async def fetch_glencoe_events() -> List[Dict[str, Any]]:
         page += 1
     logger.info(f"Found {len(events)} events for Glencoe")
     return events
+
+def _wnpld_clean_time(raw: str) -> str:
+    if not isinstance(raw, str):
+        return ""
+    normalized = raw.replace("\u2013", "-").replace("\u2014", "-")
+    return clean_text(normalized)
+
+def _wnpld_request(url: str) -> str:
+    resp = requests.get(url, headers=WNPLD_HEADERS, timeout=20)
+    resp.raise_for_status()
+    return resp.text
+
+async def _wnpld_request_async(url: str) -> str:
+    async with REQUESTS_SEM:
+        return await asyncio.to_thread(_wnpld_request, url)
+
+def _wnpld_parse_listing(html: str) -> List[Dict[str, Any]]:
+    """Parse WNPLD upcoming events listing into event dicts."""
+    if not html:
+        return []
+    soup = _make_soup(html)
+    events = []
+    for card in soup.select("article.event-card"):
+        link_el = card.select_one("a.lc-event__link")
+        if not link_el:
+            link_el = card.find("a", href=re.compile(r"^/event/"))
+        if not link_el:
+            continue
+        title = clean_text(link_el.get_text(" ", strip=True))
+        if not title:
+            continue
+        href = link_el.get("href") or ""
+        link = urljoin(WNPLD_BASE_URL, href)
+        month_el = card.select_one(".lc-date-icon__item--month")
+        day_el = card.select_one(".lc-date-icon__item--day")
+        year_el = card.select_one(".lc-date-icon__item--year")
+        month = clean_text(month_el.get_text(strip=True)) if month_el else ""
+        day = clean_text(day_el.get_text(strip=True)) if day_el else ""
+        year = clean_text(year_el.get_text(strip=True)) if year_el else ""
+        date_str = f"{month} {day} {year}".strip() if month and day and year else "Not found"
+        time_el = card.select_one(".lc-event-info-item--time")
+        time_str = _wnpld_clean_time(time_el.get_text(" ", strip=True) if time_el else "") or "Not found"
+        age_el = card.select_one(".lc-event-info__item--colors")
+        age_group = clean_text(age_el.get_text(" ", strip=True)) if age_el else ""
+        branch_el = card.select_one(".lc-event-info__item--categories")
+        branch = clean_text(branch_el.get_text(" ", strip=True)) if branch_el else ""
+        events.append({
+            "Library": "Winnetka-Northfield",
+            "Title": title,
+            "Date": date_str,
+            "Time": time_str,
+            "Location": branch or "Winnetka-Northfield Public Library District",
+            "Age Group": age_group or "Not found",
+            "Program Type": "Not found",
+            "Description": "Not found",
+            "Link": link,
+            "_wnpld_branch": branch,
+        })
+    return events
+
+def _wnpld_parse_detail(html: str) -> Dict[str, str]:
+    """Extract richer details from a WNPLD event detail page."""
+    soup = _make_soup(html)
+    title_el = soup.find("h1")
+    title = clean_text(title_el.get_text(" ", strip=True)) if title_el else ""
+    branch_el = soup.select_one(".lc-event-branch")
+    room_el = soup.select_one(".lc-event-room")
+    date_el = soup.select_one(".lc-event-info-item--date")
+    time_el = soup.select_one(".lc-event-info-item--time")
+    program_el = soup.select_one(".lc-event__program-types")
+    age_el = soup.select_one(".lc-event__age-groups")
+    branch = clean_text(branch_el.get_text(" ", strip=True)) if branch_el else ""
+    room = clean_text(room_el.get_text(" ", strip=True)) if room_el else ""
+    date_str = clean_text(date_el.get_text(" ", strip=True)) if date_el else ""
+    time_str = _wnpld_clean_time(time_el.get_text(" ", strip=True) if time_el else "")
+    program_type = clean_text(program_el.get_text(" ", strip=True)) if program_el else ""
+    program_type = re.sub(r"^Program Type:\\s*", "", program_type, flags=re.I).strip()
+    age_group = clean_text(age_el.get_text(" ", strip=True)) if age_el else ""
+    age_group = re.sub(r"^Age Group:\\s*", "", age_group, flags=re.I).strip()
+    description = ""
+    meta_desc = soup.find("meta", {"name": "description"})
+    if meta_desc and meta_desc.get("content"):
+        description = clean_text(meta_desc["content"])
+    if not description:
+        og_desc = soup.find("meta", {"property": "og:description"})
+        if og_desc and og_desc.get("content"):
+            description = clean_text(og_desc["content"])
+    location = ""
+    if branch and room:
+        location = f"{room} at {branch}"
+    elif branch:
+        location = branch
+
+    return {
+        "Title": title,
+        "Date": date_str,
+        "Time": time_str,
+        "Location": location,
+        "Program Type": program_type,
+        "Age Group": age_group,
+        "Description": description or "Not found",
+        "_wnpld_branch": branch,
+    }
+
+async def _wnpld_enrich_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    url = event.get("Link")
+    if not url:
+        return event
+    try:
+        html = await _wnpld_request_async(url)
+    except Exception as e:
+        logger.warning(f"WNPLD detail fetch failed for {url}: {e}")
+        return event
+    details = _wnpld_parse_detail(html)
+    for key in ("Title", "Date", "Time", "Location", "Program Type", "Age Group", "Description", "_wnpld_branch"):
+        value = details.get(key)
+        if value:
+            event[key] = value
+    return event
+
+async def fetch_wnpld_events_all() -> List[Dict[str, Any]]:
+    """Fetch all Winnetka-Northfield events and enrich from detail pages."""
+    global WNPLD_CACHE
+    async with WNPLD_CACHE_LOCK:
+        if WNPLD_CACHE is not None:
+            return WNPLD_CACHE
+        logger.info("Fetching Winnetka-Northfield events...")
+        all_events: List[Dict[str, Any]] = []
+        for page in range(WNPLD_MAX_PAGES):
+            url = WNPLD_EVENTS_URL if page == 0 else f"{WNPLD_EVENTS_URL}?page={page}"
+            try:
+                html = await _wnpld_request_async(url)
+            except Exception as e:
+                logger.error(f"Failed to fetch WNPLD page {page}: {e}")
+                break
+            page_events = _wnpld_parse_listing(html)
+            if not page_events:
+                break
+            all_events.extend(page_events)
+        # De-duplicate by link
+        by_link = {}
+        for ev in all_events:
+            link = ev.get("Link")
+            if link and link not in by_link:
+                by_link[link] = ev
+        unique_events = list(by_link.values())
+        if unique_events:
+            enriched = await asyncio.gather(*(_wnpld_enrich_event(ev) for ev in unique_events))
+        else:
+            enriched = []
+        WNPLD_CACHE = [ev for ev in enriched if isinstance(ev, dict)]
+        logger.info(f"Found {len(WNPLD_CACHE)} events for Winnetka-Northfield")
+        return WNPLD_CACHE
+
+async def fetch_wnpld_branch_events(branch_name: str, library_label: str) -> List[Dict[str, Any]]:
+    """Filter Winnetka-Northfield events by branch name."""
+    all_events = await fetch_wnpld_events_all()
+    branch_events = []
+    branch_lower = branch_name.lower()
+    for event in all_events:
+        branch = (event.get("_wnpld_branch") or event.get("Location") or "").lower()
+        if branch_lower in branch:
+            cleaned = dict(event)
+            cleaned["Library"] = library_label
+            cleaned.pop("_wnpld_branch", None)
+            branch_events.append(cleaned)
+    logger.info(f"Found {len(branch_events)} events for {library_label}")
+    return branch_events
 
 async def _fetch_skokie_parks_page(session) -> str:
     """Fetch raw HTML for Skokie Park District events."""
@@ -1988,9 +2177,14 @@ async def main():
             ("Evanston", lambda: fetch_bibliocommons_events("Evanston", EVANSTON_BASE_URL)),
             ("CPL Edgebrook", lambda: fetch_bibliocommons_events("CPL Edgebrook", CPL_BASE_URL, "locations=27")),
             ("CPL Budlong Woods", lambda: fetch_bibliocommons_events("CPL Budlong Woods", CPL_BASE_URL, "locations=16")),
+            ("CPL Albany Park", lambda: fetch_bibliocommons_events("CPL Albany Park", CPL_BASE_URL, "locations=3")),
             ("CPL Northtown", lambda: fetch_bibliocommons_events("CPL Northtown", CPL_BASE_URL, "locations=56")),
             ("CPL Rogers Park", lambda: fetch_bibliocommons_events("CPL Rogers Park", CPL_BASE_URL, "locations=61")),
+            ("Glenview", lambda: fetch_bibliocommons_events("Glenview", GLENVIEW_BASE_URL)),
             ("Wilmette", lambda: fetch_libnet_events("Wilmette", "wilmette.libnet.info")),
+            ("Northbrook", lambda: fetch_libnet_events("Northbrook", "visit.northbrook.info")),
+            ("Winnetka", lambda: fetch_wnpld_branch_events("Winnetka", "Winnetka")),
+            ("Northfield", lambda: fetch_wnpld_branch_events("Northfield", "Northfield")),
             ("Skokie Library", lambda: fetch_skokie_events()),
             ("Skokie Parks", lambda: fetch_skokie_parks_events()),
             ("Chicago Parks", lambda: fetch_chicago_parks_events()),

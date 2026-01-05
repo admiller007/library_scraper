@@ -1,0 +1,111 @@
+{
+  "started_at": "2026-01-05T06:01:50.962414",
+  "updated_at": "2026-01-05T06:02:33.277547",
+  "sources": {
+    "Lincolnwood": {
+      "state": "success",
+      "count": 31,
+      "message": ""
+    },
+    "Morton Grove (MGPL)": {
+      "state": "success",
+      "count": 26,
+      "message": ""
+    },
+    "Glencoe": {
+      "state": "success",
+      "count": 148,
+      "message": ""
+    },
+    "Evanston": {
+      "state": "success",
+      "count": 100,
+      "message": ""
+    },
+    "CPL Edgebrook": {
+      "state": "success",
+      "count": 34,
+      "message": ""
+    },
+    "CPL Budlong Woods": {
+      "state": "success",
+      "count": 100,
+      "message": ""
+    },
+    "CPL Albany Park": {
+      "state": "success",
+      "count": 45,
+      "message": ""
+    },
+    "CPL Northtown": {
+      "state": "success",
+      "count": 73,
+      "message": ""
+    },
+    "CPL Rogers Park": {
+      "state": "success",
+      "count": 91,
+      "message": ""
+    },
+    "Glenview": {
+      "state": "success",
+      "count": 100,
+      "message": ""
+    },
+    "Wilmette": {
+      "state": "success",
+      "count": 220,
+      "message": ""
+    },
+    "Skokie Library": {
+      "state": "success",
+      "count": 24,
+      "message": ""
+    },
+    "Skokie Parks": {
+      "state": "success",
+      "count": 223,
+      "message": ""
+    },
+    "Chicago Parks": {
+      "state": "success",
+      "count": 142,
+      "message": ""
+    },
+    "Forest Preserves": {
+      "state": "success",
+      "count": 262,
+      "message": ""
+    },
+    "Niles": {
+      "state": "success",
+      "count": 203,
+      "message": ""
+    },
+    "Northbrook": {
+      "state": "success",
+      "count": 191,
+      "message": ""
+    },
+    "Winnetka": {
+      "state": "success",
+      "count": 139,
+      "message": ""
+    },
+    "Northfield": {
+      "state": "success",
+      "count": 48,
+      "message": ""
+    }
+  },
+  "summary": {
+    "state": "completed",
+    "total_sources": 19,
+    "succeeded": 19,
+    "failed": 0,
+    "running": 0,
+    "pending": 0,
+    "events": 2017,
+    "message": "Scrape finished"
+  }
+}
