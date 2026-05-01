@@ -126,6 +126,9 @@ The scraper currently supports these libraries (as of latest commit):
 6. **Skokie Public Library** - Firecrawl scraper
 7. **Niles Library** - LibNet API
 8. **Chicago Park District** - Based on commit history (recently added/merged)
+9. **Mount Prospect Public Library** - LibNet API (`mppl.libnet.info`)
+10. **Schaumburg Township District Library** - LibNet API (`schaumburg.libnet.info`)
+11. **Des Plaines Public Library** - LibNet API (`desplaines.libnet.info`)
 
 ### Library System Types
 
@@ -134,7 +137,7 @@ The scraper currently supports these libraries (as of latest commit):
 - Paginated results
 - Structured markdown parsing
 
-**LibNet**: Wilmette, Niles
+**LibNet**: Wilmette, Niles, Northbrook, Mount Prospect, Schaumburg, Des Plaines
 - JSON API endpoints
 - Age-based filtering
 - Post-processing for K-2 and 3-5 grade groups
