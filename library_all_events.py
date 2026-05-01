@@ -2189,7 +2189,10 @@ async def main():
             ("Skokie Parks", lambda: fetch_skokie_parks_events()),
             ("Chicago Parks", lambda: fetch_chicago_parks_events()),
             ("Forest Preserves", lambda: fetch_fpdcc_events()),
-            ("Niles", lambda: fetch_libnet_events("Niles", "nmdl.libnet.info"))
+            ("Niles", lambda: fetch_libnet_events("Niles", "nmdl.libnet.info")),
+            ("Mount Prospect", lambda: fetch_libnet_events("Mount Prospect", "mppl.libnet.info")),
+            ("Schaumburg", lambda: fetch_libnet_events("Schaumburg", "schaumburg.libnet.info")),
+            ("Des Plaines", lambda: fetch_libnet_events("Des Plaines", "desplaines.libnet.info"))
         ]
 
         tasks = [run_source_with_progress(label, fn) for label, fn in sources]
