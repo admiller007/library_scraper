@@ -10,6 +10,7 @@ import os
 import json
 import re
 import hashlib
+import hmac
 from io import BytesIO
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
@@ -32,6 +33,8 @@ TIMEZONE = os.getenv("TIMEZONE", "America/Chicago")
 TZINFO = ZoneInfo(TIMEZONE)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 PROGRESS_FILE = DATA_DIR / "scrape_progress.json"
+REFRESH_TOKEN = os.getenv("REFRESH_TOKEN") or os.getenv("ADMIN_REFRESH_TOKEN")
+REFRESH_TOKEN_HEADER = "X-Refresh-Token"
 
 app = Flask(__name__, template_folder=str(BASE_DIR / "templates"))
 
@@ -480,6 +483,28 @@ def write_progress_stub(state: str, message: str):
     except Exception as exc:
         print(f"Failed to write progress stub: {exc}")
 
+def has_refresh_access(req: request) -> tuple[bool, str]:
+    """Validate refresh access using a shared secret token."""
+    if not REFRESH_TOKEN:
+        return False, "Manual refresh token is not configured."
+
+    provided = (
+        req.headers.get(REFRESH_TOKEN_HEADER)
+        or req.args.get("token")
+        or req.cookies.get("refresh_token")
+    )
+
+    if not provided:
+        return False, "Missing refresh token."
+
+    try:
+        if hmac.compare_digest(str(provided), REFRESH_TOKEN):
+            return True, ""
+    except Exception:
+        pass
+
+    return False, "Invalid refresh token."
+
 @app.route('/')
 def index():
     """Main page"""
@@ -514,6 +539,18 @@ def index():
                          types=types,
                          min_date=min_date_iso,
                          max_date=max_date_iso)
+
+@app.route('/refresh')
+def refresh_page():
+    """Private refresh page guarded by a shared token."""
+    csv_file = load_latest_csv()
+    return render_template(
+        'refresh.html',
+        csv_file=csv_file,
+        total_events=len(events_data),
+        token_required=bool(REFRESH_TOKEN),
+        token_header=REFRESH_TOKEN_HEADER
+    )
 
 @app.route('/health')
 def health():
@@ -640,9 +677,17 @@ def download_pdf():
         download_name=filename
     )
 
-@app.route('/api/refresh', methods=['POST', 'GET'])
+@app.route('/api/refresh', methods=['POST'])
 def refresh_data():
     """Refresh data by running the scraper in the background so the UI can poll progress."""
+    allowed, reason = has_refresh_access(request)
+    if not allowed:
+        return jsonify({
+            'success': False,
+            'running': False,
+            'message': reason
+        }), 403
+
     global SCRAPER_THREAD
     with SCRAPER_LOCK:
         if SCRAPER_THREAD and SCRAPER_THREAD.is_alive():

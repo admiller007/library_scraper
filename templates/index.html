@@ -75,12 +75,6 @@
                     <span class="material-symbols-outlined text-lg">picture_as_pdf</span>
                     Download PDF
                 </button>
-                <button onclick="refreshData()"
-                        id="refresh-btn"
-                        class="inline-flex items-center gap-2 px-4 py-2 bg-primary hover:bg-blue-600 text-white rounded-lg font-medium transition-colors">
-                    <span class="material-symbols-outlined text-lg">refresh</span>
-                    Refresh Data
-                </button>
             </div>
         </header>
 
@@ -297,10 +291,7 @@
         let allEvents = [];
         let filteredEvents = [];
         let progressInterval = null;
-        let awaitingRefreshData = false;
         let lastProgressState = 'idle';
-        let lastEventsTotal = 0;
-        let lastDataLoadTs = null;
 
         // Load events on page load
         document.addEventListener('DOMContentLoaded', function() {
@@ -376,8 +367,6 @@
                 const response = await fetch('/api/events');
                 const data = await response.json();
                 allEvents = data.events;
-                lastEventsTotal = data.total;
-                lastDataLoadTs = Date.now();
                 displayEvents(allEvents);
                 updateStatus(`Showing ${data.total} events`);
             } catch (error) {
@@ -596,51 +585,16 @@
             return params.toString();
         }
 
-        async function refreshData() {
-            updateStatus('Starting scraper... This runs in the background.');
-            const refreshBtn = document.getElementById('refresh-btn');
-            const originalText = refreshBtn.innerHTML;
-            refreshBtn.innerHTML = `
-                <div class="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full"></div>
-                Refreshing...
-            `;
-            refreshBtn.disabled = true;
-
-            try {
-                const response = await fetch('/api/refresh', { method: 'POST' });
-                const result = await response.json();
-
-                if (response.ok && result.success) {
-                    awaitingRefreshData = true;
-                    startProgressPolling();
-                    fetchProgress(true);
-                    updateStatus('Scraper started. Tracking progress...');
-                } else if (result.running) {
-                    awaitingRefreshData = true;
-                    startProgressPolling();
-                    fetchProgress(true);
-                    updateStatus('A scrape is already running. Tracking progress...');
-                } else {
-                    updateStatus('Error: ' + result.message);
-                }
-            } catch (error) {
-                updateStatus('Error refreshing data: ' + error.message);
-            } finally {
-                refreshBtn.disabled = false;
-                refreshBtn.innerHTML = originalText;
-            }
-        }
-
-        async function fetchProgress(force = false) {
+        async function fetchProgress() {
             try {
                 const response = await fetch('/api/progress');
                 const data = await response.json();
                 renderProgress(data);
                 const state = (data?.summary?.state || 'idle').toLowerCase();
                 const activeStates = ['running', 'queued', 'degraded', 'pending'];
-                if (activeStates.includes(state) || awaitingRefreshData) {
+                if (activeStates.includes(state)) {
                     startProgressPolling();
-                } else if (!awaitingRefreshData) {
+                } else {
                     stopProgressPolling();
                 }
             } catch (error) {
@@ -700,7 +654,6 @@
 
             const finishedStates = ['completed', 'completed_with_errors', 'error'];
             if (finishedStates.includes(state) && state !== lastProgressState) {
-                awaitingRefreshData = false;
                 loadEvents().then(() => {
                     document.getElementById('last-updated').textContent = new Date().toLocaleString();
                 });

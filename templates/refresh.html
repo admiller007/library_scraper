@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html class="light" lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manual Refresh • Library Events</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#137fec",
+                        "background-light": "#f6f7f8",
+                        "background-dark": "#101922",
+                    },
+                    fontFamily: {
+                        "display": ["Inter", "sans-serif"]
+                    },
+                    borderRadius: {"DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px"},
+                },
+            },
+        }
+    </script>
+</head>
+<body class="font-display bg-background-light min-h-screen">
+    <div class="max-w-3xl mx-auto py-10 px-4 space-y-6">
+        <div class="flex items-center justify-between">
+            <div>
+                <p class="text-sm text-slate-500">Admin-only</p>
+                <h1 class="text-2xl font-bold text-slate-900">Manual Refresh</h1>
+                <p class="text-slate-600 mt-1">
+                    Latest data file: {{ csv_file or "Not available" }} • Events loaded: {{ total_events }}
+                </p>
+            </div>
+            <a href="/" class="text-primary font-medium hover:underline">Back to site</a>
+        </div>
+
+        {% if not token_required %}
+        <div class="p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-800">
+            Set <code class="font-mono">REFRESH_TOKEN</code> (or <code class="font-mono">ADMIN_REFRESH_TOKEN</code>) in your environment to enable manual refresh access.
+        </div>
+        {% endif %}
+
+        <div class="bg-white border border-slate-200 rounded-lg shadow-sm p-6 space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 mb-2" for="refresh-token">Refresh token</label>
+                <input id="refresh-token" type="password" autocomplete="off" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary" placeholder="Enter your secret token">
+                <p class="text-xs text-slate-500 mt-1">The token is never stored; it is only sent with your manual request.</p>
+            </div>
+            <div class="flex items-center gap-3">
+                <button id="refresh-btn" class="inline-flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg font-semibold disabled:opacity-50 disabled:cursor-not-allowed" {% if not token_required %}disabled{% endif %}>
+                    <span class="material-symbols-outlined text-base">refresh</span>
+                    Trigger scrape
+                </button>
+                <button id="progress-btn" class="text-sm text-primary font-medium hover:underline">Sync progress</button>
+            </div>
+            <div id="status" class="text-sm text-slate-700">Idle</div>
+        </div>
+
+        <div class="bg-white border border-slate-200 rounded-lg shadow-sm p-6">
+            <div class="flex items-center justify-between mb-3">
+                <div>
+                    <p class="text-sm font-semibold text-slate-800">Scrape Progress</p>
+                    <p id="progress-meta" class="text-xs text-slate-500">No runs yet</p>
+                </div>
+                <span class="text-xs text-slate-500" id="progress-updated"></span>
+            </div>
+            <div id="progress-summary" class="text-sm text-slate-700">Waiting for data...</div>
+        </div>
+    </div>
+
+    <script>
+        const tokenHeader = "{{ token_header }}";
+        let pollInterval = null;
+
+        document.getElementById('refresh-btn').addEventListener('click', triggerRefresh);
+        document.getElementById('progress-btn').addEventListener('click', fetchProgress);
+
+        fetchProgress();
+
+        async function triggerRefresh() {
+            const tokenInput = document.getElementById('refresh-token');
+            const token = tokenInput.value.trim();
+            if (!token) {
+                updateStatus('Please enter your refresh token.');
+                return;
+            }
+
+            setLoading(true);
+            updateStatus('Starting scraper...');
+
+            try {
+                const response = await fetch('/api/refresh', {
+                    method: 'POST',
+                    headers: {
+                        [tokenHeader]: token
+                    }
+                });
+
+                const payload = await response.json();
+                if (response.ok && payload.success) {
+                    updateStatus('Scraper started.');
+                    startPolling();
+                    fetchProgress();
+                } else {
+                    updateStatus(payload.message || 'Unable to start scraper.');
+                }
+            } catch (error) {
+                updateStatus('Error contacting server.');
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        async function fetchProgress() {
+            try {
+                const response = await fetch('/api/progress');
+                const data = await response.json();
+                renderProgress(data);
+
+                const state = (data?.summary?.state || 'idle').toLowerCase();
+                const activeStates = ['running', 'queued', 'degraded', 'pending'];
+                if (activeStates.includes(state)) {
+                    startPolling();
+                } else {
+                    stopPolling();
+                }
+            } catch (error) {
+                updateStatus('Could not load progress.');
+            }
+        }
+
+        function renderProgress(data) {
+            const summaryEl = document.getElementById('progress-summary');
+            const metaEl = document.getElementById('progress-meta');
+            const updatedEl = document.getElementById('progress-updated');
+
+            if (!data || !data.summary) {
+                summaryEl.textContent = 'No progress available.';
+                metaEl.textContent = 'Idle';
+                return;
+            }
+
+            const summary = data.summary || {};
+            const state = (summary.state || 'idle').toLowerCase();
+            const updatedAt = summary.updated_at || data.updated_at || '';
+            const message = summary.message || '';
+
+            metaEl.textContent = `State: ${stateLabel(state)}`;
+            updatedEl.textContent = updatedAt ? `Updated ${new Date(updatedAt).toLocaleTimeString()}` : '';
+            summaryEl.innerHTML = `
+                <div class="space-y-1">
+                    <div class="text-sm"><strong>Events:</strong> ${summary.events ?? '—'}</div>
+                    <div class="text-sm"><strong>Sources:</strong> ${summary.succeeded ?? 0}/${summary.total_sources ?? 0}${summary.failed ? `, ${summary.failed} failed` : ''}</div>
+                    ${message ? `<div class="text-xs text-slate-500">${escapeHtml(message)}</div>` : ''}
+                </div>
+            `;
+        }
+
+        function startPolling() {
+            if (pollInterval) return;
+            pollInterval = setInterval(fetchProgress, 2500);
+        }
+
+        function stopPolling() {
+            if (pollInterval) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+            }
+        }
+
+        function updateStatus(message) {
+            document.getElementById('status').textContent = message;
+        }
+
+        function setLoading(state) {
+            const btn = document.getElementById('refresh-btn');
+            btn.disabled = state;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text || '';
+            return div.innerHTML;
+        }
+
+        function stateLabel(state) {
+            const labels = {
+                idle: 'Idle',
+                pending: 'Pending',
+                queued: 'Queued',
+                running: 'Running',
+                success: 'Done',
+                completed: 'Completed',
+                completed_with_errors: 'Completed (with issues)',
+                degraded: 'Partial',
+                error: 'Error'
+            };
+            return labels[state] || state;
+        }
+    </script>
+</body>
+</html>

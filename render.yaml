@@ -4,7 +4,7 @@ services:
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: DATA_DIR=/opt/render/project/src/data python library_all_events.py && gunicorn library_web_gui:app --bind 0.0.0.0:$PORT --workers 2 --timeout 180
+    startCommand: DATA_DIR=/opt/render/project/src/data gunicorn library_web_gui:app --bind 0.0.0.0:$PORT --workers 2 --timeout 180
     envVars:
       - key: FIRECRAWL_API_KEY
         sync: false
