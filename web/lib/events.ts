@@ -7,8 +7,10 @@ export async function getUpcomingEvents(): Promise<EventRow[]> {
   cacheLife('hours');
   cacheTag('events');
 
+  const client = getSupabase();
+  if (!client) return [];
   const today = new Date().toISOString().slice(0, 10);
-  const { data, error } = await getSupabase()
+  const { data, error } = await client
     .from('events')
     .select('*')
     .gte('event_date', today)
@@ -23,7 +25,9 @@ export async function getLatestScrapeRun(): Promise<ScrapeRun | null> {
   cacheLife('minutes');
   cacheTag('events');
 
-  const { data, error } = await getSupabase()
+  const client = getSupabase();
+  if (!client) return null;
+  const { data, error } = await client
     .from('scrape_runs')
     .select('*')
     .order('started_at', { ascending: false })
