@@ -19,16 +19,25 @@ export function EventCard({ event }: { event: EventRow }) {
       {event.description && (
         <p className="mt-2 text-sm text-gray-700 line-clamp-3">{event.description}</p>
       )}
-      {event.link && (
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+        {event.link && (
+          <a
+            className="text-blue-600 hover:underline"
+            href={event.link}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Event details &rarr;
+          </a>
+        )}
         <a
-          className="mt-2 inline-block text-sm text-blue-600 hover:underline"
-          href={event.link}
-          target="_blank"
-          rel="noreferrer"
+          className="text-blue-600 hover:underline"
+          href={`/api/export/ics/${event.id}`}
+          download
         >
-          Event details &rarr;
+          Add to calendar
         </a>
-      )}
+      </div>
     </article>
   );
 }
