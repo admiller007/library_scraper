@@ -1,10 +1,29 @@
 import type { EventRow } from '@/lib/supabase';
 
-export function EventCard({ event }: { event: EventRow }) {
+type Props = {
+  event: EventRow;
+  selected?: boolean;
+  onSelectedChange?: (selected: boolean) => void;
+};
+
+export function EventCard({ event, selected = false, onSelectedChange }: Props) {
   return (
-    <article className="rounded-lg border border-gray-200 bg-white p-4 hover:shadow-md transition">
-      <div className="flex items-baseline justify-between gap-4">
-        <h3 className="font-semibold text-gray-900">{event.title}</h3>
+    <article
+      className={`rounded-lg border bg-white p-4 transition ${
+        selected ? 'border-blue-300 shadow-sm ring-1 ring-blue-100' : 'border-gray-200 hover:shadow-md'
+      }`}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex min-w-0 items-start gap-3">
+          <input
+            type="checkbox"
+            className="mt-1 h-4 w-4 shrink-0"
+            checked={selected}
+            onChange={(e) => onSelectedChange?.(e.target.checked)}
+            aria-label={`Select ${event.title}`}
+          />
+          <h3 className="font-semibold text-gray-900">{event.title}</h3>
+        </div>
         <span className="text-xs uppercase tracking-wide text-gray-500 whitespace-nowrap">
           {event.library}
         </span>
