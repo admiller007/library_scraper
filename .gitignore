@@ -17,3 +17,4 @@ skokie_debug.txt
 skokie_raw_*
 *.har
 gitdata/
+.worktrees/
