@@ -10,7 +10,7 @@ import aiohttp
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup, FeatureNotFound
@@ -2161,147 +2161,163 @@ def compute_date_window(cli_args=None) -> tuple[str, int]:
 
     return start_date_str, days
 
-async def main():
-    # Compute date window from CLI/env and set module globals used by fetchers
+async def _gather_and_filter_events(start_date_str: str, days: int) -> Tuple[List[Dict[str, Any]], bool]:
+    """Run all source fetchers, dedup, parse dates, filter to window, sort.
+
+    Sets module globals START_DATE / DAYS_TO_FETCH that downstream fetchers read.
+    Returns (events, had_errors). Events include 'datetime_obj' and 'time_obj'
+    helper fields used for sorting and downstream generators; callers that
+    serialize the events should drop those keys.
+    """
     global START_DATE, DAYS_TO_FETCH
-    START_DATE, DAYS_TO_FETCH = compute_date_window()
-    logger.info(f"Using date window: start={START_DATE}, days={DAYS_TO_FETCH}")
+    START_DATE, DAYS_TO_FETCH = start_date_str, days
+
+    sources = [
+        ("Lincolnwood", lambda: fetch_lincolnwood_events()),
+        ("Morton Grove (MGPL)", lambda: fetch_mgpl_events()),
+        ("Glencoe", lambda: fetch_glencoe_events()),
+        ("Evanston", lambda: fetch_bibliocommons_events("Evanston", EVANSTON_BASE_URL)),
+        ("CPL Edgebrook", lambda: fetch_bibliocommons_events("CPL Edgebrook", CPL_BASE_URL, "locations=27")),
+        ("CPL Budlong Woods", lambda: fetch_bibliocommons_events("CPL Budlong Woods", CPL_BASE_URL, "locations=16")),
+        ("CPL Albany Park", lambda: fetch_bibliocommons_events("CPL Albany Park", CPL_BASE_URL, "locations=3")),
+        ("CPL Northtown", lambda: fetch_bibliocommons_events("CPL Northtown", CPL_BASE_URL, "locations=56")),
+        ("CPL Rogers Park", lambda: fetch_bibliocommons_events("CPL Rogers Park", CPL_BASE_URL, "locations=61")),
+        ("Glenview", lambda: fetch_bibliocommons_events("Glenview", GLENVIEW_BASE_URL)),
+        ("Wilmette", lambda: fetch_libnet_events("Wilmette", "wilmette.libnet.info")),
+        ("Northbrook", lambda: fetch_libnet_events("Northbrook", "visit.northbrook.info")),
+        ("Winnetka", lambda: fetch_wnpld_branch_events("Winnetka", "Winnetka")),
+        ("Northfield", lambda: fetch_wnpld_branch_events("Northfield", "Northfield")),
+        ("Skokie Library", lambda: fetch_skokie_events()),
+        ("Skokie Parks", lambda: fetch_skokie_parks_events()),
+        ("Chicago Parks", lambda: fetch_chicago_parks_events()),
+        ("Forest Preserves", lambda: fetch_fpdcc_events()),
+        ("Niles", lambda: fetch_libnet_events("Niles", "nmdl.libnet.info")),
+        ("Mount Prospect", lambda: fetch_libnet_events("Mount Prospect", "mppl.libnet.info")),
+        ("Schaumburg", lambda: fetch_libnet_events("Schaumburg", "schaumburg.libnet.info")),
+        ("Des Plaines", lambda: fetch_libnet_events("Des Plaines", "desplaines.libnet.info"))
+    ]
+
+    tasks = [run_source_with_progress(label, fn) for label, fn in sources]
 
     try:
-        # Define tasks for all library systems (NO age group filtering)
-        await init_progress_state()
-        sources = [
-            ("Lincolnwood", lambda: fetch_lincolnwood_events()),
-            ("Morton Grove (MGPL)", lambda: fetch_mgpl_events()),
-            ("Glencoe", lambda: fetch_glencoe_events()),
-            ("Evanston", lambda: fetch_bibliocommons_events("Evanston", EVANSTON_BASE_URL)),
-            ("CPL Edgebrook", lambda: fetch_bibliocommons_events("CPL Edgebrook", CPL_BASE_URL, "locations=27")),
-            ("CPL Budlong Woods", lambda: fetch_bibliocommons_events("CPL Budlong Woods", CPL_BASE_URL, "locations=16")),
-            ("CPL Albany Park", lambda: fetch_bibliocommons_events("CPL Albany Park", CPL_BASE_URL, "locations=3")),
-            ("CPL Northtown", lambda: fetch_bibliocommons_events("CPL Northtown", CPL_BASE_URL, "locations=56")),
-            ("CPL Rogers Park", lambda: fetch_bibliocommons_events("CPL Rogers Park", CPL_BASE_URL, "locations=61")),
-            ("Glenview", lambda: fetch_bibliocommons_events("Glenview", GLENVIEW_BASE_URL)),
-            ("Wilmette", lambda: fetch_libnet_events("Wilmette", "wilmette.libnet.info")),
-            ("Northbrook", lambda: fetch_libnet_events("Northbrook", "visit.northbrook.info")),
-            ("Winnetka", lambda: fetch_wnpld_branch_events("Winnetka", "Winnetka")),
-            ("Northfield", lambda: fetch_wnpld_branch_events("Northfield", "Northfield")),
-            ("Skokie Library", lambda: fetch_skokie_events()),
-            ("Skokie Parks", lambda: fetch_skokie_parks_events()),
-            ("Chicago Parks", lambda: fetch_chicago_parks_events()),
-            ("Forest Preserves", lambda: fetch_fpdcc_events()),
-            ("Niles", lambda: fetch_libnet_events("Niles", "nmdl.libnet.info")),
-            ("Mount Prospect", lambda: fetch_libnet_events("Mount Prospect", "mppl.libnet.info")),
-            ("Schaumburg", lambda: fetch_libnet_events("Schaumburg", "schaumburg.libnet.info")),
-            ("Des Plaines", lambda: fetch_libnet_events("Des Plaines", "desplaines.libnet.info"))
-        ]
+        all_results = await asyncio.gather(*tasks, return_exceptions=True)
+    finally:
+        await close_http_session()
 
-        tasks = [run_source_with_progress(label, fn) for label, fn in sources]
+    errors = [res for res in all_results if isinstance(res, Exception)]
+    had_errors = bool(errors)
+    if had_errors:
+        logger.error(f"{len(errors)} sources failed during scrape")
 
+    all_events = [event for res in all_results if isinstance(res, list) for event in res]
+    logger.info(f"Total events found: {len(all_events)}")
+
+    unique_events, seen = [], set()
+    for event in all_events:
+        identifier = (event.get('Library'), event.get('Title'), event.get('Date'), event.get('Time'))
+        if identifier not in seen:
+            unique_events.append(event)
+            seen.add(identifier)
+    all_events = unique_events
+    logger.info(f"Total events after de-duplication: {len(all_events)}")
+
+    if not all_events:
+        return [], had_errors
+
+    try:
+        window_start = datetime.strptime(START_DATE, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        logger.warning("Invalid START_DATE; defaulting filter to today's date")
+        window_start = datetime.now().date()
+    window_end = window_start + timedelta(days=max(DAYS_TO_FETCH - 1, 0))
+
+    for event in all_events:
         try:
-            all_results = await asyncio.gather(*tasks, return_exceptions=True)
-        finally:
-            # Ensure session cleanup
-            await close_http_session()
+            if not isinstance(event, dict):
+                logger.warning(f"Skipping invalid event type: {type(event)}")
+                continue
 
-        errors = [res for res in all_results if isinstance(res, Exception)]
-        had_errors = bool(errors)
-        if had_errors:
-            logger.error(f"{len(errors)} sources failed during scrape")
-
-        all_events = [event for res in all_results if isinstance(res, list) for event in res]
-        logger.info(f"Total events found: {len(all_events)}")
-
-        # Remove duplicates
-        unique_events, seen = [], set()
-        for event in all_events:
-            identifier = (event.get('Library'), event.get('Title'), event.get('Date'), event.get('Time'))
-            if identifier not in seen:
-                unique_events.append(event)
-                seen.add(identifier)
-        logger.info(f"Total events after de-duplication: {len(unique_events)}")
-        all_events = unique_events
-
-        if not all_events: 
-            logger.info("No events found")
-            await mark_overall_state("completed_with_errors" if had_errors else "completed", total_events=0, message="No events found")
-            return
-
-        # Determine the requested date window
-        try:
-            window_start = datetime.strptime(START_DATE, "%Y-%m-%d").date()
-        except (TypeError, ValueError):
-            logger.warning("Invalid START_DATE; defaulting filter to today's date")
-            window_start = datetime.now().date()
-        window_end = window_start + timedelta(days=max(DAYS_TO_FETCH - 1, 0))
-
-        # Process and add datetime objects for sorting and ICS generation
-        for event in all_events:
-            try:
-                if not isinstance(event, dict):
-                    logger.warning(f"Skipping invalid event type: {type(event)}")
-                    continue
-                    
-                date_str = event.get('Date', '')
-                if not date_str or date_str == 'Not found':
-                    logger.debug(f"Event '{event.get('Title', 'Unknown')}' has no valid date")
-                    event['datetime_obj'] = datetime.max
-                    continue
-                    
-                date_str_cleaned = date_str.replace(',', '').replace(' at', '')
-                dt_obj = None
-                
-                # Try different date formats
-                date_formats = [
-                    ("%A %B %d %Y", r'\w+ \w+ \d{1,2} \d{4}'),
-                    ("%b %d %Y", r'\w{3} \d{1,2} \d{4}'),
-                    ("%Y-%m-%d", r'\d{4}-\d{2}-\d{2}')
-                ]
-                
-                for fmt, pattern in date_formats:
-                    if re.fullmatch(pattern, date_str_cleaned):
-                        try:
-                            dt_obj = datetime.strptime(date_str_cleaned, fmt)
-                            break
-                        except ValueError as e:
-                            logger.debug(f"Failed to parse date '{date_str_cleaned}' with format '{fmt}': {e}")
-                            continue
-                
-                if dt_obj:
-                    event['datetime_obj'] = dt_obj
-                    event['Date'] = dt_obj.strftime("%A, %B %d, %Y")
-                else:
-                    logger.debug(f"Could not parse date '{date_str_cleaned}' for event '{event.get('Title', 'Unknown')}'")
-                    event['datetime_obj'] = datetime.max
-                    
-            except Exception as e:
-                logger.warning(f"Error processing event datetime: {e}")
+            date_str = event.get('Date', '')
+            if not date_str or date_str == 'Not found':
+                logger.debug(f"Event '{event.get('Title', 'Unknown')}' has no valid date")
                 event['datetime_obj'] = datetime.max
-                
-            event['time_obj'] = parse_time_to_sortable(event.get('Time', ''))
+                continue
 
-        # Filter events to the requested window
-        filtered_events = []
-        for event in all_events:
-            dt_obj = event.get('datetime_obj')
-            if isinstance(dt_obj, datetime) and window_start <= dt_obj.date() <= window_end:
-                filtered_events.append(event)
-        if not filtered_events:
-            logger.info("No events fall within the requested date window")
-            await mark_overall_state("completed_with_errors" if had_errors else "completed", total_events=0, message="No events fall within the requested date window")
+            date_str_cleaned = date_str.replace(',', '').replace(' at', '')
+            dt_obj = None
+            date_formats = [
+                ("%A %B %d %Y", r'\w+ \w+ \d{1,2} \d{4}'),
+                ("%b %d %Y", r'\w{3} \d{1,2} \d{4}'),
+                ("%Y-%m-%d", r'\d{4}-\d{2}-\d{2}')
+            ]
+            for fmt, pattern in date_formats:
+                if re.fullmatch(pattern, date_str_cleaned):
+                    try:
+                        dt_obj = datetime.strptime(date_str_cleaned, fmt)
+                        break
+                    except ValueError as e:
+                        logger.debug(f"Failed to parse date '{date_str_cleaned}' with format '{fmt}': {e}")
+                        continue
+            if dt_obj:
+                event['datetime_obj'] = dt_obj
+                event['Date'] = dt_obj.strftime("%A, %B %d, %Y")
+            else:
+                logger.debug(f"Could not parse date '{date_str_cleaned}' for event '{event.get('Title', 'Unknown')}'")
+                event['datetime_obj'] = datetime.max
+        except Exception as e:
+            logger.warning(f"Error processing event datetime: {e}")
+            event['datetime_obj'] = datetime.max
+
+        event['time_obj'] = parse_time_to_sortable(event.get('Time', ''))
+
+    filtered_events = [
+        e for e in all_events
+        if isinstance(e.get('datetime_obj'), datetime)
+        and window_start <= e['datetime_obj'].date() <= window_end
+    ]
+    filtered_events.sort(key=lambda x: (x.get('datetime_obj', datetime.max), x['Library'], x.get('time_obj', datetime.min.time())))
+    return filtered_events, had_errors
+
+
+async def collect_all_events(start_date_str: Optional[str] = None, days: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Run all fetchers and return filtered+sorted events.
+
+    Public entry point for callers outside the CLI (e.g. the Supabase adapter).
+    Initializes progress state, computes the date window from CLI/env if not
+    provided, runs all source fetchers, and returns the deduplicated event list.
+    """
+    if start_date_str is None or days is None:
+        sd, d = compute_date_window()
+        if start_date_str is None:
+            start_date_str = sd
+        if days is None:
+            days = d
+    logger.info(f"Using date window: start={start_date_str}, days={days}")
+    await init_progress_state()
+    events, _ = await _gather_and_filter_events(start_date_str, days)
+    return events
+
+
+async def main():
+    start_date_str, days = compute_date_window()
+    logger.info(f"Using date window: start={start_date_str}, days={days}")
+    try:
+        await init_progress_state()
+        all_events, had_errors = await _gather_and_filter_events(start_date_str, days)
+
+        if not all_events:
+            logger.info("No events found in window")
+            await mark_overall_state(
+                "completed_with_errors" if had_errors else "completed",
+                total_events=0,
+                message="No events found in window",
+            )
             return
-        all_events = filtered_events
 
-        # Sort events by date, library, and time
-        all_events.sort(key=lambda x: (x.get('datetime_obj', datetime.max), x['Library'], x.get('time_obj', datetime.min.time())))
-
-        # Generate reports
         base_filename = DATA_DIR / f"all_library_events_{datetime.now():%Y%m%d}"
-        
-        # Generate ICS and PDF reports
         generate_ics_file(all_events, base_filename)
         generate_pdf_report(all_events, base_filename)
 
-        # Prepare DataFrame for CSV (dropping temporary datetime helper columns)
         try:
             df = pd.DataFrame(all_events).drop(columns=['datetime_obj', 'time_obj'], errors='ignore')
             csv_filename = base_filename.with_suffix('.csv')
@@ -2313,18 +2329,18 @@ async def main():
         final_state = "completed_with_errors" if had_errors else "completed"
         await mark_overall_state(final_state, total_events=len(all_events), message="Scrape finished")
 
-        # Print summary by age group
-        age_group_counts = {}
+        age_group_counts: Dict[str, int] = {}
         for event in all_events:
             age_group = event.get('Age Group', 'Unknown')
             age_group_counts[age_group] = age_group_counts.get(age_group, 0) + 1
-        
+
         logger.info("Events by Age Group:")
         for age_group, count in sorted(age_group_counts.items()):
             logger.info(f"  {age_group}: {count} events")
     except Exception as exc:
         await mark_overall_state("error", message=str(exc))
         raise
+
 
 if __name__ == "__main__":
     asyncio.run(main())
