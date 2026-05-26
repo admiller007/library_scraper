@@ -54,9 +54,17 @@ export default function RootLayout({
         <header className="border-b bg-white">
           <div className="max-w-6xl mx-auto p-4 flex items-center justify-between text-sm">
             <span className="font-semibold">Library Events</span>
-            <Suspense fallback={<span className="text-gray-400">…</span>}>
-              <LastRefreshed />
-            </Suspense>
+            <div className="flex items-center gap-4">
+              <a href="/api/export/ics" className="text-blue-600 hover:underline">
+                ICS
+              </a>
+              <a href="/api/export/pdf" className="text-blue-600 hover:underline">
+                PDF
+              </a>
+              <Suspense fallback={<span className="text-gray-400">…</span>}>
+                <LastRefreshed />
+              </Suspense>
+            </div>
           </div>
         </header>
         {children}
