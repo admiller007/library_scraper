@@ -1,733 +1,165 @@
-# CLAUDE.md - Library Event Scraper Documentation
+# CLAUDE.md — Library Event Scraper
 
-**Last Updated**: 2025-12-20
-**Repository**: library_scraper
-**Primary Language**: Python 3
+**Last Updated:** 2026-05-26
+**Primary languages:** Python 3.11 (scraper), TypeScript / Next.js 16 (frontend)
 
-## Project Overview
-
-This repository contains a comprehensive library event scraping system that aggregates children's programming events from multiple Chicago-area libraries and presents them through multiple interfaces (web, desktop GUI, CSV, PDF, ICS calendar).
-
-### Purpose
-- Scrape and aggregate library events from 8+ Chicago-area libraries
-- Filter events by age group (particularly K-2 and 3-5 grades)
-- Export events in multiple formats (CSV, PDF, ICS calendar)
-- Provide web and desktop GUI interfaces for viewing and filtering events
-
-### Target Audience
-Parents and educators looking for children's programming at local libraries.
-
----
-
-## Repository Structure
+## Architecture (current)
 
 ```
-library_scraper/
-├── library.py              # Core scraper library (older version, ~49KB)
-├── library_all_events.py   # Main comprehensive scraper (~91KB)
-├── library_web_gui.py      # Flask web interface (~54KB)
-├── library_gui.py          # Tkinter desktop GUI (~15KB)
-├── skokie_test.py          # Skokie library scraper test script
-├── templates/
-│   └── index.html          # Web GUI template (38KB)
-├── requirements.txt        # Python dependencies
-├── .env.example            # Environment variable template
-├── Procfile                # Heroku deployment config
-├── render.yaml             # Render.com deployment config
-└── .gitignore              # Git ignore patterns
+GitHub Actions (.github/workflows/scrape.yml)
+  └─ python scripts/scrape_to_supabase.py
+        ├─ calls collect_all_events() from library_all_events.py
+        └─ UPSERTs into Supabase (events, scrape_runs)
+                                │
+                                ▼
+                       Supabase Postgres
+                                │
+                                ▼
+                       Next.js on Vercel (web/)
+                       - lib/events.ts: cached server fetchers
+                       - app/page.tsx: server component renders events
+                       - app/components/EventList.tsx: client filtering
+                       - app/api/revalidate: bumps cacheTag('events')
+                       - app/api/export/{ics,pdf}: format exports
 ```
 
----
+There is **no Flask server** anymore and **no Render/Heroku deployment**. CSV/PDF/ICS files are not produced by the scraper by default; the Next.js routes render them on demand from Supabase.
 
-## Core Components
+## Repository structure
 
-### 1. Main Scraper (`library_all_events.py`)
+```
+LibraryScrapper/
+├── library_all_events.py      # Scraper (all library fetchers + collect_all_events)
+├── library_gui.py             # Tkinter desktop GUI — reads local CSV exports only
+├── library.py                 # Legacy module retained for any leftover imports
+├── scripts/
+│   └── scrape_to_supabase.py  # Adapter: runs scraper -> Supabase UPSERT
+├── supabase/
+│   └── schema.sql             # Provisioning SQL (events + scrape_runs + RLS)
+├── .github/workflows/
+│   └── scrape.yml             # Daily cron @ 12:00 UTC + manual dispatch
+├── web/                       # Next.js 16 frontend (Vercel)
+│   ├── lib/
+│   │   ├── supabase.ts        # Lazy client with anon key (read-only)
+│   │   └── events.ts          # Cached fetchers: getUpcomingEvents, getLatestScrapeRun
+│   ├── app/
+│   │   ├── layout.tsx         # Header w/ ICS/PDF links + last-refreshed
+│   │   ├── page.tsx           # Server Component -> <EventList>
+│   │   ├── components/        # EventCard (server), EventList (client)
+│   │   └── api/
+│   │       ├── revalidate/    # Bearer-protected revalidateTag('events', 'max')
+│   │       └── export/{ics,pdf}/
+│   └── next.config.ts         # cacheComponents: true
+├── docs/
+│   ├── deployment.md          # User-facing setup guide
+│   └── plans/                 # Design + implementation plans
+└── requirements.txt           # Python deps (no Flask/gunicorn anymore)
+```
 
-**Location**: `/home/user/library_scraper/library_all_events.py`
+## Core components
 
-**Primary Functions**:
-- `fetch_lincolnwood_events()` - Scrapes Lincolnwood Library using Firecrawl
-- `fetch_mgpl_events()` - Scrapes Morton Grove Public Library
-- `fetch_bibliocommons_events()` - Generic fetcher for Bibliocommons-based libraries (Evanston, CPL)
-- `fetch_libnet_events()` - Generic fetcher for LibNet-based libraries (Wilmette, Niles)
-- `fetch_skokie_events()` - Scrapes Skokie Library using Firecrawl
-- `generate_pdf_report()` - Creates PDF event listings
-- `generate_ics_file()` - Creates iCalendar format exports
-- `main()` - Orchestrates all fetchers and generates outputs
+### Scraper — `library_all_events.py`
 
-**Key Patterns**:
-- All fetchers return `List[Dict[str, Any]]` with standardized event schema
-- Async/await pattern for concurrent scraping (lines 973-1076)
-- Retry logic with exponential backoff (lines 65-94)
-- Robust error handling with detailed logging
+- All library fetchers return `List[Dict[str, Any]]` with the schema: `Library, Title, Date, Time, Location, Age Group, Program Type, Description, Link`.
+- **`_gather_and_filter_events(start_date_str, days)`** does the orchestration: runs all fetchers via `asyncio.gather`, deduplicates by `(Library, Title, Date, Time)`, parses dates, filters to the window, sorts.
+- **`collect_all_events(start_date_str=None, days=None)`** is the public entry point used by the Supabase adapter. It initializes progress state and calls the gather helper.
+- **`main()`** is the CLI entry point — calls `collect_all_events()` then writes CSV/PDF/ICS files locally. Used for ad-hoc local runs, not in production.
 
-**Event Schema**:
+The progress-state JSON (`scrape_progress.json`) is still written but no longer consumed by anything; it can stay for now.
+
+### Supabase adapter — `scripts/scrape_to_supabase.py`
+
+- Creates a `scrape_runs` row with `status='running'`.
+- Calls `collect_all_events()` and maps the result to Supabase rows via `_to_row()`. Computes `start_at = event_date + event_time` in `America/Chicago`.
+- UPSERTs in batches of 200 against `on_conflict=library,title,event_date,event_time`.
+- On success: marks the run `success`, POSTs to `$VERCEL_REVALIDATE_URL` with the Bearer secret.
+- On failure: marks the run `failed` with the exception repr.
+
+Required env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `FIRECRAWL_API_KEY`. Optional: `VERCEL_REVALIDATE_URL`, `REVALIDATE_SECRET`, `TIMEZONE`.
+
+### Frontend — `web/`
+
+- **Cache Components are enabled** (`cacheComponents: true`). All event reads use `'use cache'` + `cacheLife('hours' | 'minutes')` + `cacheTag('events')`.
+- `getSupabase()` returns `null` if env vars are missing so builds without Supabase configured still succeed (degraded mode: empty list, "Refresh pending").
+- Filtering is **client-side**. `getUpcomingEvents()` returns the full upcoming window in one request; `<EventList>` filters in memory.
+- Cache invalidation: `/api/revalidate` calls `revalidateTag('events', 'max')` — note the second argument is required as of Next.js 16; the single-arg form is deprecated.
+
+### Desktop GUI — `library_gui.py`
+
+Unchanged. Still loads local CSV files. Use it if you have CSVs from a local scraper run; it does **not** read from Supabase.
+
+## Event schema
+
 ```python
 {
-    "Library": str,          # Library name
-    "Title": str,            # Event title
-    "Date": str,             # Formatted date string
-    "Time": str,             # Time or "All Day"
-    "Location": str,         # Specific location/room
-    "Age Group": str,        # Target age group
-    "Program Type": str,     # Event category
-    "Description": str,      # Event description
-    "Link": str              # URL to event details
+  "Library": str,          # Source name
+  "Title": str,
+  "Date": str,             # Parseable date string
+  "Time": str,             # "HH:MM AM/PM" or "All Day"
+  "Location": str,
+  "Age Group": str,
+  "Program Type": str,
+  "Description": str,
+  "Link": str,             # URL or "N/A"
 }
 ```
 
-### 2. Web Interface (`library_web_gui.py`)
+Mapped to Supabase columns by `_to_row()` — note casing differences (`Library` → `library`, etc.).
 
-**Location**: `/home/user/library_scraper/library_web_gui.py`
+**Dedup key:** `(library, title, event_date, event_time)` — enforced by the Postgres unique constraint and matched in the Python dedup pass.
 
-**Technology**: Flask web framework
+## Common tasks
 
-**Key Routes**:
-- `/` - Main interface (renders `index.html`)
-- `/api/events` - JSON API for filtered events
-- `/api/export/ics` - ICS calendar export
-- `/api/export/pdf` - PDF export
-- `/api/scrape` - Trigger new scrape
-- `/api/scrape/status` - Check scrape progress
+### Add a new library
 
-**Features**:
-- Real-time event filtering (library, date range, search terms)
-- Advanced search with multiple modes (any/all/exact/fuzzy)
-- Multi-field search (title, description, location, age group)
-- Progress tracking for scraping operations
-- Export functionality (ICS, PDF)
+1. Identify the system (Bibliocommons / LibNet / custom Firecrawl).
+2. Add a fetcher in `library_all_events.py`.
+3. Append `("<Label>", lambda: fetch_<library>_events(...))` to the `sources` list in `_gather_and_filter_events()`.
+4. Test with `python library_all_events.py --days 1`.
+5. Run `python scripts/scrape_to_supabase.py --days 1` against a dev Supabase project to verify upserts and types.
 
-### 3. Desktop GUI (`library_gui.py`)
+### Modify the frontend
 
-**Location**: `/home/user/library_scraper/library_gui.py`
+- Server-side data fetching changes go in `web/lib/events.ts`.
+- UI changes go in `web/app/page.tsx`, `web/app/layout.tsx`, or `web/app/components/`.
+- After substantive edits run `cd web && npm run build` — it does TypeScript checks + cache-components validation.
 
-**Technology**: Tkinter
+### Add a new export format
 
-**Features**:
-- CSV file loading
-- Library filtering
-- Text search
-- Event details display
-- Link opening in browser
+Add a new route under `web/app/api/export/<format>/route.ts` that calls `getUpcomingEvents()` and returns the appropriate `Content-Type` + body. Add a link in `web/app/layout.tsx` so it's reachable.
 
----
+### Schedule changes
 
-## Libraries Covered
+GitHub Actions cron is in `.github/workflows/scrape.yml` — UTC. The daily 12:00 UTC slot equals 06:00 CST / 07:00 CDT.
 
-The scraper currently supports these libraries (as of latest commit):
+## Important constraints
 
-1. **Lincolnwood Library** - Firecrawl scraper
-2. **Morton Grove Public Library (MGPL)** - Firecrawl scraper
-3. **Evanston Public Library** - Bibliocommons API
-4. **Chicago Public Library (CPL)**:
-   - Edgebrook branch
-   - Budlong Woods branch
-5. **Wilmette Library** - LibNet API
-6. **Skokie Public Library** - Firecrawl scraper
-7. **Niles Library** - LibNet API
-8. **Chicago Park District** - Based on commit history (recently added/merged)
-9. **Mount Prospect Public Library** - LibNet API (`mppl.libnet.info`)
-10. **Schaumburg Township District Library** - LibNet API (`schaumburg.libnet.info`)
-11. **Des Plaines Public Library** - LibNet API (`desplaines.libnet.info`)
-
-### Library System Types
-
-**Bibliocommons**: Evanston, CPL branches
-- API-based scraping
-- Paginated results
-- Structured markdown parsing
-
-**LibNet**: Wilmette, Niles, Northbrook, Mount Prospect, Schaumburg, Des Plaines
-- JSON API endpoints
-- Age-based filtering
-- Post-processing for K-2 and 3-5 grade groups
-
-**Custom Sites**: Lincolnwood, Morton Grove, Skokie
-- Firecrawl-based scraping
-- Markdown parsing
-- Regex-based date/time extraction
-
----
-
-## Configuration & Environment
-
-### Environment Variables
-
-Defined in `.env.example`:
-
-```bash
-FIRECRAWL_API_KEY=your_api_key_here  # Required for Firecrawl scrapers
-TIMEZONE=America/Chicago              # Timezone for event parsing
-DATA_DIR=./data                       # Data storage directory
-```
-
-Additional runtime configuration (from code):
-
-```python
-DEFAULT_DAYS_TO_FETCH = 31                    # Event fetch window
-DEFAULT_LIBNET_AGES = ["Grades K-2", "Grades 3-5"]  # Age filter
-FIRECRAWL_CONCURRENCY = 1                     # Rate limiting
-MAX_RETRIES = 3                               # Retry attempts
-```
-
-### Command Line Arguments
-
-`library_all_events.py` supports:
-
-```bash
---start-date YYYY-MM-DD       # Event start date
---days N                      # Number of days to fetch
---start-offset-days N         # Offset from today
---libnet-ages "K-2,3-5"      # LibNet age filters
---libnet-request-ages "Kids"  # LibNet API ages
-```
-
----
-
-## Development Workflows
-
-### Adding a New Library
-
-1. **Identify library system type** (Bibliocommons/LibNet/Custom)
-2. **For Bibliocommons**:
-   - Use `fetch_bibliocommons_events(name, base_url, query_params)`
-   - Add to tasks list in `main()` (line 986-995)
-3. **For LibNet**:
-   - Use `fetch_libnet_events(name, domain)`
-   - Configure age filtering if needed
-4. **For Custom**:
-   - Create new async fetcher function following pattern
-   - Use Firecrawl for reliable scraping
-   - Parse markdown/HTML to extract events
-   - Return standardized event schema
-
-### Testing a New Scraper
-
-```bash
-# Create test file (see skokie_test.py as example)
-python skokie_test.py
-
-# Or run full scraper and check logs
-python library_all_events.py --days 7
-```
-
-### Code Style Conventions
-
-- **Error Handling**: Try/except blocks with specific exception types
-- **Logging**: Use `logger.info/warning/error/debug` extensively
-- **Type Hints**: Use for function signatures where helpful
-- **Async**: Use `async/await` for IO-bound operations
-- **Validation**: Check data types before processing
-- **Cleaning**: Use `clean_text()` for all text fields (lines 100-118)
-
----
-
-## Key Helper Functions
-
-### Text Processing
-
-**`clean_text(text: str) -> str`** (library.py:100-118)
-- Removes non-ASCII characters
-- Strips markdown formatting
-- Removes extra whitespace
-- Handles duplicate content
-
-**`parse_time_to_sortable(time_str: str) -> datetime.time`** (library.py:120-139)
-- Parses various time formats
-- Returns `datetime.time` for sorting
-- Handles "All Day" events
-
-### Scraping Utilities
-
-**`retry_with_backoff(func, *args, **kwargs)`** (library.py:65-94)
-- Exponential backoff retry logic
-- Handles connection errors, timeouts, rate limits
-- Configurable max retries
-
-**`firecrawl_scrape(app, url, **kwargs)`** (library.py:96-98)
-- Semaphore-controlled Firecrawl requests
-- Prevents rate limiting
-
-### Report Generation
-
-**`generate_pdf_report(all_events, filename)`** (library.py:745-799)
-- Uses PyLaTeX for PDF generation
-- Groups events by date
-- Includes all event details
-
-**`generate_ics_file(all_events, filename)`** (library.py:802-896)
-- Creates iCalendar format
-- Sets proper timezones
-- Includes event URLs and descriptions
-- Generates stable UIDs for deduplication
-
----
-
-## Data Flow
-
-```
-┌─────────────────────────────────────────────────┐
-│  library_all_events.py main()                   │
-│                                                 │
-│  1. Parse CLI args & env vars                  │
-│  2. Launch async fetchers concurrently         │
-│  3. Aggregate results                          │
-│  4. Deduplicate events                         │
-│  5. Parse & sort by date/time                  │
-│  6. Generate outputs (CSV/PDF/ICS)             │
-└─────────────────────────────────────────────────┘
-                    │
-                    ├─→ CSV: all_library_events_YYYYMMDD.csv
-                    ├─→ PDF: all_library_events_YYYYMMDD.pdf
-                    └─→ ICS: all_library_events_YYYYMMDD.ics
-
-┌─────────────────────────────────────────────────┐
-│  library_web_gui.py                             │
-│                                                 │
-│  - Loads latest CSV from DATA_DIR               │
-│  - Serves web interface                         │
-│  - Provides filtering & export APIs             │
-│  - Can trigger new scrapes                      │
-└─────────────────────────────────────────────────┘
-```
-
----
+- **No Node.js dependencies in the scraper.** Stays pure Python so GitHub Actions can install via pip.
+- **No Python in the frontend.** Stays pure Next.js so Vercel can build it cleanly.
+- **`revalidateTag(tag, profile)` requires two args** in Next.js 16. Always pass `'max'` (or another defined profile).
+- **`runtime = 'nodejs'`** route-segment export is not allowed when `cacheComponents` is true. Don't add it.
+- **Cached functions can't access `cookies()`/`headers()`/`searchParams`.** Read those outside the cache scope and pass values as arguments.
 
 ## Deployment
 
-### Render.com (Production)
+See [`docs/deployment.md`](docs/deployment.md). Short version:
 
-Configuration in `render.yaml`:
+1. Run `supabase/schema.sql` in your Supabase project.
+2. Connect Vercel to the repo, root = `web/`. Set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `REVALIDATE_SECRET`.
+3. Set GitHub Actions secrets: `FIRECRAWL_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `VERCEL_REVALIDATE_URL`, `REVALIDATE_SECRET`.
+4. Trigger "Daily scrape" once manually to seed events.
 
-- **Build**: `pip install -r requirements.txt`
-- **Start**: Run scraper then start gunicorn
-- **Cron**: Daily refresh at 6 AM (0 6 * * *)
-- **Storage**: 1GB persistent disk at `/opt/render/project/src/data`
-- **Workers**: 2 gunicorn workers, 180s timeout
+## Testing
 
-### Heroku (Alternative)
+There is no formal test suite. Smoke tests:
 
-Configuration in `Procfile`:
-```
-web: gunicorn library_web_gui:app --bind 0.0.0.0:$PORT --workers 2 --timeout 180
-```
+- **Scraper:** `python library_all_events.py --days 1` should produce CSV/PDF/ICS without crashing.
+- **Adapter helpers:** see the inline checks in the commit that introduced `scrape_to_supabase.py` (date parsers, row mapping).
+- **Frontend:** `cd web && npm run build` covers TS + cache-component constraints. For runtime, `npm run dev` and hit `/`, `/api/export/ics`, `/api/export/pdf`, `/api/revalidate` (with Bearer).
 
-### Local Development
+## Plans + history
 
-```bash
-# Setup environment
-python -m venv library_env
-source library_env/bin/activate  # or library_env\Scripts\activate on Windows
-pip install -r requirements.txt
+- Design: `docs/plans/2026-05-25-vercel-supabase-migration-design.md`
+- Implementation plan: `docs/plans/2026-05-25-vercel-supabase-migration.md`
 
-# Configure
-cp .env.example .env
-# Edit .env with your FIRECRAWL_API_KEY
-
-# Run scraper
-python library_all_events.py
-
-# Run web interface
-python library_web_gui.py
-# Visit http://localhost:5000
-
-# Run desktop GUI
-python library_gui.py
-```
-
----
-
-## Git Workflow
-
-### Branch Naming Convention
-
-Based on git status, the repository uses:
-- `main` - Main branch (default branch appears to be unset)
-- `feature/*` - Feature branches (e.g., `feature/add-chicago-parks-events`)
-- `claude/*` - AI-assisted development branches (e.g., `claude/add-wilmette-park-scraper-...`)
-
-### Commit Message Style
-
-From recent history:
-- Use descriptive, action-oriented messages
-- Examples:
-  - "Add Wilmette Park District events scraper"
-  - "Enhance library web GUI with improved Chicago Parks integration"
-  - "Fix event count display to update dynamically"
-
-### Pull Request Workflow
-
-- Feature branches merged via PRs
-- Some PRs include multiple related commits
-- Occasionally features are reverted (e.g., PR #8 reverted PR #7)
-
----
-
-## Common Tasks for AI Assistants
-
-### 1. Adding a New Library
-
-**Files to modify**:
-- `library_all_events.py` - Add fetcher function and include in `main()`
-
-**Steps**:
-1. Identify the library's event system (Bibliocommons/LibNet/Custom)
-2. Add fetcher function following existing patterns
-3. Add to tasks list in `main()` (around line 986)
-4. Test with limited date range first
-5. Verify event schema compliance
-6. Check for duplicates in output
-
-**Example locations**:
-- Bibliocommons: Lines 365-400
-- LibNet: Lines 402-608
-- Custom (Firecrawl): Lines 148-234, 241-339, 616-741
-
-### 2. Fixing Scraper Issues
-
-**Common problems**:
-- **Rate limiting**: Adjust `FIRECRAWL_CONCURRENCY` or add delays
-- **Parse errors**: Check markdown structure changes on library site
-- **Missing events**: Verify date filtering and age group logic
-- **Duplicate events**: Check deduplication logic (lines 1001-1006)
-
-**Debugging**:
-- Check logs: `library_events.log`
-- Enable debug logging: Change `level=logging.INFO` to `level=logging.DEBUG`
-- Test individual fetchers by calling them directly
-
-### 3. Modifying Filters
-
-**Age group filtering** (LibNet only):
-- Global config: `DEFAULT_LIBNET_AGES` (line 44)
-- Per-library logic: Lines 504-577 in `fetch_libnet_events()`
-- Uses regex patterns to match various age formats
-
-**Date range**:
-- Default window: `DEFAULT_DAYS_TO_FETCH = 31` (line 42)
-- Override via CLI: `--start-date`, `--days`, `--start-offset-days`
-- Computed in: `compute_date_window()` (lines 900-971)
-
-### 4. Adding Export Formats
-
-**Current exports**:
-- CSV: pandas DataFrame (lines 1066-1072)
-- PDF: PyLaTeX (function at lines 745-799)
-- ICS: ics library (function at lines 802-896)
-
-**To add new format**:
-1. Create generator function accepting `List[Dict[str, Any]]`
-2. Follow pattern of existing generators
-3. Add to `main()` around line 1062
-4. Consider adding to web GUI export routes
-
-### 5. UI Modifications
-
-**Web GUI**:
-- Template: `templates/index.html`
-- Backend: `library_web_gui.py`
-- Filtering logic: `filter_events()` function (lines 84-233)
-
-**Desktop GUI**:
-- File: `library_gui.py`
-- Uses tkinter widgets
-- Less actively maintained than web interface
-
----
-
-## Important Constraints & Considerations
-
-### API Rate Limits
-
-- **Firecrawl**: Controlled via `FIRECRAWL_SEM` semaphore (default: 1 concurrent)
-- Rate limit handling in `retry_with_backoff()` (lines 80-88)
-- 429 responses trigger extended backoff
-
-### Date/Time Parsing
-
-- **Timezone aware**: Uses `zoneinfo.ZoneInfo` (default: America/Chicago)
-- **Multiple formats supported**: See `parse_time_to_sortable()` and date parsing in `main()`
-- **All Day events**: Handled as `datetime.min.time()`
-
-### Event Deduplication
-
-- Uses tuple of: `(Library, Title, Date, Time)` as unique identifier
-- Implemented at lines 1001-1006
-- Important for libraries that may list same event multiple times
-
-### Text Encoding
-
-- All text cleaned to ASCII via `clean_text()` (line 107)
-- Removes zero-width spaces, markdown, extra whitespace
-- LaTeX escaping for PDF generation
-
-### Error Recovery
-
-- Individual fetcher failures don't crash entire scrape
-- `asyncio.gather(..., return_exceptions=True)` (line 996)
-- Failed fetchers return empty list `[]`
-- All errors logged for debugging
-
----
-
-## Testing Strategy
-
-### Unit Testing
-
-Currently no formal test suite. To add tests:
-```python
-# Example test structure
-import pytest
-from library_all_events import clean_text, parse_time_to_sortable
-
-def test_clean_text():
-    assert clean_text("  Hello   World  ") == "Hello World"
-    assert clean_text("[Link](url)") == ""
-
-def test_parse_time():
-    from datetime import time
-    assert parse_time_to_sortable("2:30 PM") == time(14, 30)
-    assert parse_time_to_sortable("All Day") == time.min
-```
-
-### Integration Testing
-
-Manually test with limited date range:
-```bash
-python library_all_events.py --days 3 --start-date 2025-12-20
-```
-
-Verify:
-- All libraries return events
-- No crashes in logs
-- Output files generated correctly
-- Events are properly deduplicated
-
----
-
-## Logging & Monitoring
-
-### Log Configuration
-
-- **Location**: `library_events.log` (rotating, 2MB max, 3 backups)
-- **Level**: INFO (change to DEBUG for troubleshooting)
-- **Format**: `%(asctime)s - %(name)s - %(levelname)s - %(message)s`
-
-### Key Log Messages
-
-- `"Fetching [Library] events..."` - Scraper start
-- `"Found X events for [Library]"` - Scraper success
-- `"Filtered out X events..."` - Age filtering applied
-- `"Total events found: X"` - Aggregation complete
-- `"Total events after de-duplication: X"` - Final count
-
-### Monitoring Production
-
-On Render.com:
-- Check cron job logs for daily runs
-- Monitor disk usage (1GB limit)
-- Watch for API key issues (Firecrawl)
-- Check gunicorn worker health
-
----
-
-## Dependencies
-
-From `requirements.txt`:
-
-```
-aiohttp>=3.8.0          # Async HTTP client
-beautifulsoup4>=4.12.2  # HTML parsing (Park District scraper)
-requests>=2.28.0        # HTTP client
-pandas>=1.5.0           # Data manipulation
-firecrawl-py>=0.0.16    # Web scraping API
-ics>=0.7.2              # iCalendar format
-pylatex>=1.4.1          # PDF generation
-python-dotenv>=0.20.0   # Environment variables
-Flask>=3.0.0            # Web framework
-gunicorn>=21.2.0        # WSGI server
-reportlab>=4.1.0        # PDF generation (web GUI)
-```
-
-### Dependency Notes
-
-- **firecrawl-py**: Requires API key, main scraping engine
-- **pylatex**: Requires LaTeX installation for PDF generation
-- **reportlab**: Alternative PDF generation (used in web GUI)
-- **beautifulsoup4**: Added for Park District integration
-
----
-
-## Security Considerations
-
-### API Keys
-
-- Firecrawl API key in environment (never commit to git)
-- `.env` in `.gitignore` (line 4)
-- Default key in code (line 37) should be replaced in production
-
-### Input Validation
-
-- User input in web GUI is filtered but not extensively sanitized
-- Search terms used in string matching (potential XSS in future HTML display)
-- File paths constructed from user input (DATA_DIR should be validated)
-
-### Recommendations for AI Assistants
-
-1. Never commit `.env` files
-2. Rotate API keys if exposed
-3. Sanitize user input before display in HTML
-4. Validate file paths in web GUI upload features
-5. Use environment variables for all secrets
-
----
-
-## Troubleshooting Guide
-
-### Issue: Scraper returns 0 events
-
-**Possible causes**:
-1. Library website structure changed
-2. API key invalid/expired
-3. Network connectivity issues
-4. Date range has no events
-
-**Debug steps**:
-```bash
-# Enable debug logging
-# Edit library_all_events.py, change logging.INFO to logging.DEBUG
-
-# Test single library
-python library_all_events.py --days 1
-
-# Check logs
-tail -f library_events.log
-```
-
-### Issue: Rate limiting / 429 errors
-
-**Solution**:
-- Reduce `FIRECRAWL_CONCURRENCY` (default: 1)
-- Increase `RETRY_DELAY` (default: 1s)
-- Add delays between library fetches
-
-### Issue: PDF generation fails
-
-**Cause**: Missing LaTeX installation
-
-**Solution**:
-```bash
-# Ubuntu/Debian
-sudo apt-get install texlive-latex-base texlive-fonts-recommended
-
-# macOS
-brew install basictex
-```
-
-### Issue: Wrong timezone for events
-
-**Solution**: Set `TIMEZONE` environment variable
-```bash
-export TIMEZONE=America/New_York
-python library_all_events.py
-```
-
-### Issue: Duplicate events in output
-
-**Debug**: Check deduplication logic at lines 1001-1006
-- Verify event schema has consistent Library/Title/Date/Time
-- Some libraries may use different formatting
-
----
-
-## Future Enhancement Ideas
-
-Based on codebase analysis, potential improvements:
-
-1. **Testing**: Add pytest suite for core functions
-2. **Documentation**: Add inline docstrings to all functions
-3. **Monitoring**: Add Sentry or similar for error tracking
-4. **Performance**: Cache Firecrawl results to reduce API calls
-5. **Features**:
-   - Email notifications for new events
-   - Event favoriting/bookmarking
-   - Mobile-responsive web design improvements
-   - RSS feed generation
-   - Integration with Google Calendar
-6. **Code Quality**:
-   - Type hints throughout
-   - Separate configuration module
-   - Extract library-specific logic to plugins
-   - Add CI/CD pipeline
-
----
-
-## Quick Reference
-
-### File Locations
-- Main scraper: `library_all_events.py`
-- Web interface: `library_web_gui.py`
-- Desktop GUI: `library_gui.py`
-- Configuration: `.env` (create from `.env.example`)
-- Logs: `library_events.log`
-- Output: `all_library_events_YYYYMMDD.*`
-
-### Important Line Numbers (library_all_events.py)
-- Configuration: Lines 36-61
-- Helper functions: Lines 63-139
-- Lincolnwood fetcher: Lines 143-234
-- Morton Grove fetcher: Lines 236-339
-- Bibliocommons fetcher: Lines 341-400
-- LibNet fetcher: Lines 402-608
-- Skokie fetcher: Lines 610-741
-- PDF generator: Lines 745-799
-- ICS generator: Lines 802-896
-- Main execution: Lines 973-1076
-
-### Key Functions to Understand
-1. `retry_with_backoff()` - Error handling pattern
-2. `clean_text()` - Text normalization
-3. `fetch_libnet_events()` - Complex API interaction with filtering
-4. `filter_events()` (web_gui) - Multi-faceted event filtering
-5. `main()` - Orchestration and data flow
-
----
-
-## Appendix: Event Schema Details
-
-### Required Fields
-- `Library` (str): Source library name
-- `Title` (str): Event title
-- `Date` (str): Date in parseable format
-- `Time` (str): Time or "All Day"
-- `Location` (str): Specific venue
-- `Age Group` (str): Target audience
-- `Description` (str): Event details
-- `Link` (str): URL or "N/A"
-
-### Optional Fields
-- `Program Type` (str): Category (currently "Not found" for most)
-
-### Field Constraints
-- All text fields cleaned via `clean_text()`
-- Dates must be parseable by datetime formats (lines 1028-1041)
-- Links should be full URLs (some fetchers prepend base URL)
-
-### Deduplication Key
-`(Library, Title, Date, Time)` tuple must be unique
-
----
-
-## Contact & Contribution
-
-This documentation is intended for AI assistants working with this codebase. When making changes:
-
-1. **Maintain backward compatibility** with existing event schema
-2. **Test thoroughly** before deploying
-3. **Update this documentation** when adding major features
-4. **Follow existing code patterns** for consistency
-5. **Log extensively** for troubleshooting
-
----
-
-**End of CLAUDE.md**
+The implementation plan contains the original task breakdown; later sessions should follow new plans, not re-execute that one.
