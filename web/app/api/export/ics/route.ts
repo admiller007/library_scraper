@@ -1,8 +1,22 @@
 import { NextResponse } from 'next/server';
+import { connection } from 'next/server';
 import * as ics from 'ics';
 import { getUpcomingEvents } from '@/lib/events';
 
+function validHttpUrl(raw: string | null): string | undefined {
+  const match = raw?.match(/https?:\/\/\S+/);
+  if (!match) return undefined;
+  const value = match[0].replace(/[)"'<>]+$/, '');
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function GET() {
+  await connection();
   const events = await getUpcomingEvents();
   const calEvents: ics.EventAttributes[] = events.flatMap((e) => {
     if (!e.start_at) return [];
@@ -22,7 +36,7 @@ export async function GET() {
       title: e.title,
       description: e.description ?? '',
       location: e.location ?? e.library,
-      url: e.link ?? undefined,
+      url: validHttpUrl(e.link),
     } satisfies ics.EventAttributes];
   });
   const { error, value } = ics.createEvents(calEvents);

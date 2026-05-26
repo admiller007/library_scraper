@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { Suspense } from "react";
 import "./globals.css";
 import { getLatestScrapeRun } from "@/lib/events";
+import { LastRefreshed as LastRefreshedLabel } from "./components/LastRefreshed";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -19,25 +20,14 @@ export const metadata: Metadata = {
   description: "Daily-refreshed children's programming from Chicago-area libraries.",
 };
 
-function timeAgo(iso: string): string {
-  const diffMs = Date.now() - new Date(iso).getTime();
-  const hrs = Math.floor(diffMs / 3_600_000);
-  if (hrs < 1) {
-    const mins = Math.max(1, Math.floor(diffMs / 60_000));
-    return `${mins}m ago`;
-  }
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
-
 async function LastRefreshed() {
   const run = await getLatestScrapeRun();
-  const label = run?.finished_at
-    ? `Updated ${timeAgo(run.finished_at)}`
-    : run?.status === 'running'
-      ? 'Refreshing…'
-      : 'Refresh pending';
-  return <span className="text-gray-600">{label}</span>;
+  return (
+    <LastRefreshedLabel
+      finishedAt={run?.finished_at ?? null}
+      status={run?.status ?? null}
+    />
+  );
 }
 
 export default function RootLayout({

@@ -2185,6 +2185,7 @@ async def _gather_and_filter_events(start_date_str: str, days: int) -> Tuple[Lis
         ("Glenview", lambda: fetch_bibliocommons_events("Glenview", GLENVIEW_BASE_URL)),
         ("Wilmette", lambda: fetch_libnet_events("Wilmette", "wilmette.libnet.info")),
         ("Northbrook", lambda: fetch_libnet_events("Northbrook", "visit.northbrook.info")),
+        ("Deerfield", lambda: fetch_libnet_events("Deerfield", "deerfield.libnet.info")),
         ("Winnetka", lambda: fetch_wnpld_branch_events("Winnetka", "Winnetka")),
         ("Northfield", lambda: fetch_wnpld_branch_events("Northfield", "Northfield")),
         ("Skokie Library", lambda: fetch_skokie_events()),

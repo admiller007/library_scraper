@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { connection } from 'next/server';
 import {
   renderToBuffer,
   Document,
@@ -19,6 +20,7 @@ const styles = StyleSheet.create({
 });
 
 export async function GET() {
+  await connection();
   const events = await getUpcomingEvents();
   const doc = React.createElement(
     Document,

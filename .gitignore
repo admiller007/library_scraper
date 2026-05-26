@@ -18,3 +18,4 @@ skokie_raw_*
 *.har
 gitdata/
 .worktrees/
+.vercel
