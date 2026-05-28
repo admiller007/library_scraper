@@ -15,7 +15,7 @@ export async function getUpcomingEvents(): Promise<EventRow[]> {
     .select('*')
     .gte('event_date', today)
     .order('start_at', { ascending: true })
-    .limit(2000);
+    .limit(5000);
   if (error) throw new Error(error.message);
   return (data ?? []) as EventRow[];
 }
