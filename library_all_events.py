@@ -12,7 +12,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, unquote
 from bs4 import BeautifulSoup, FeatureNotFound
 from bs4 import BeautifulSoup
 try:
@@ -67,8 +67,6 @@ MAX_RETRIES = 3
 RETRY_DELAY = 1  # seconds
 
 # --- Library Specific Config (MODIFIED: Remove age group filtering) ---
-LINCOLNWOOD_URL = 'https://www.lincolnwoodlibrary.org/events/list'  # Remove age group filter
-LINCOLNWOOD_DATE_REGEX = r'\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b'
 MGPL_URL = 'https://www.mgpl.org/events/list'  # Remove age group filter
 EVANSTON_BASE_URL = 'https://evanstonlibrary.bibliocommons.com/v2/events'
 CPL_BASE_URL = 'https://chipublib.bibliocommons.com/v2/events'
@@ -90,7 +88,6 @@ WNPLD_HEADERS = {
 
 # Pre-compiled regex patterns for performance
 COMPILED_PATTERNS = {
-    'lincolnwood_date': re.compile(LINCOLNWOOD_DATE_REGEX),
     'time_pattern': re.compile(r'(\d{1,2}:\d{2}[ap]m(?:–\d{1,2}:\d{2}[ap]m)?)'),
     'markdown_links': re.compile(r'!?\[.*?\]\(.*?\)'),
     'bold_text': re.compile(r'\*{1,2}(.*?)\*{1,2}'),
@@ -432,123 +429,19 @@ def get_enhanced_location(item: dict, library_name: str) -> str:
 
 # --- FETCHERS (MODIFIED: Remove age filtering) ---
 
-# UPDATED: Changed to use AsyncFirecrawl
-async def _fetch_lincolnwood_content(app: AsyncFirecrawl) -> str:
-    """Fetch content from Lincolnwood with error handling."""
-    response = await firecrawl_scrape(app, url=LINCOLNWOOD_URL, only_main_content=True)
-    return response.markdown if hasattr(response, "markdown") else ""
-
 async def fetch_lincolnwood_events() -> List[Dict[str, Any]]:
-    logger.info("Fetching Lincolnwood events (ALL EVENTS)...")
-    if not FIRECRAWL_API_KEY:
-        logger.warning("FIRECRAWL_API_KEY not set; skipping Lincolnwood fetch")
-        return []
-    app = AsyncFirecrawl(api_key=FIRECRAWL_API_KEY)  # UPDATED: Changed from AsyncFirecrawlApp
-    try:
-        markdown = await retry_with_backoff(_fetch_lincolnwood_content, app)
-        if not markdown:
-            logger.warning("No markdown content received from Lincolnwood")
-            return []
-    except ValueError as e:
-        logger.error(f"Invalid response from Lincolnwood API: {e}")
-        return []
-    except ConnectionError as e:
-        logger.error(f"Connection error while fetching Lincolnwood events: {e}")
-        return []
-    except Exception as e:
-        logger.error(f"Unexpected error fetching Lincolnwood events: {e}", exc_info=True)
-        return []
-    if not markdown:
-        return []
-    try:
-        events_raw = markdown.split("### ")[1:]
-    except (IndexError, AttributeError) as e:
-        logger.error(f"Error parsing Lincolnwood markdown structure: {e}")
-        return []
-    
-    all_events = []
+    """Fetch Lincolnwood Public Library events.
 
-    # Common non-event headings that appear on the page; skip these blocks
-    non_event_title_patterns = [
-        re.compile(r"policy", re.IGNORECASE),
-        re.compile(r"library\s+hours", re.IGNORECASE),
-        re.compile(r"about\s+the\s+library", re.IGNORECASE),
-        re.compile(r"accessibilit(y|ies)", re.IGNORECASE),
-        re.compile(r"registration\s+info|how\s+to\s+register", re.IGNORECASE),
-    ]
-    for raw_text in events_raw:
-        try:
-            lines = [line.strip() for line in raw_text.strip().split("\n") if line.strip()]
-            if not lines:
-                logger.debug("Skipping empty event block")
-                continue
-            
-            title = clean_text(lines[0])
-            if not title:
-                logger.debug("Skipping event with empty title")
-                continue
-
-            # Skip obvious non-event headings such as policies or info pages
-            if any(p.search(title) for p in non_event_title_patterns):
-                logger.debug(f"Skipping non-event heading: '{title}'")
-                continue
-            
-            time_match = COMPILED_PATTERNS['time_pattern'].search(raw_text)
-            time_str = time_match.group(0) if time_match else "Not found"
-            if time_str == "Not found":
-                logger.debug(f"Skipping event '{title}' - no time found")
-                continue
-            
-            markdown_before = markdown[:markdown.find(raw_text)]
-            date_matches = COMPILED_PATTERNS['lincolnwood_date'].findall(markdown_before)
-            date_str = date_matches[-1] if date_matches else "Not found"
-            
-            if date_str == "Not found":
-                logger.debug(f"Skipping event '{title}' - no date found")
-                continue
-            
-            description_lines = [clean_text(l) for l in lines[1:] if "register" not in l.lower()]
-            description = " ".join(description_lines) if description_lines else "Not found"
-
-            # Enhanced location extraction for Lincolnwood
-            location = "Lincolnwood Library"  # Default
-
-            # Look for room information in the content
-            room_patterns = [
-                r'Room:\s*Meeting Room\s*([A-Z/]+)',
-                r'Meeting Room\s*([A-Z/]+)',
-                r'Room:\s*([^,\n*]+)',
-                r'Library Branch:\s*[^,\n]*Room:\s*([^,\n*]+)'
-            ]
-
-            full_content = raw_text
-            for pattern in room_patterns:
-                room_match = re.search(pattern, full_content, re.IGNORECASE)
-                if room_match:
-                    room = clean_text(room_match.group(1))
-                    if room and room.strip() and "lincolnwood" not in room.lower():
-                        location = f"{room} at Lincolnwood Library"
-                        break
-
-            # Extract age group from content instead of hardcoding
-            age_group = extract_age_group(f"{title} {description}")
-
-            all_events.append({
-                "Library": "Lincolnwood",
-                "Title": title,
-                "Date": date_str,
-                "Time": time_str,
-                "Location": location,
-                "Age Group": age_group,
-                "Program Type": "Not found",
-                "Description": description,
-                "Link": "N/A"
-            })
-        except Exception as e:
-            logger.warning(f"Error processing Lincolnwood event: {e}")
-            continue
-    logger.info(f"Found {len(all_events)} events for Lincolnwood")
-    return all_events
+    The library moved to a LibraryMarket LibraryCalendar (Drupal 'lc-') site,
+    so this now delegates to the generic plain-HTTP adapter instead of the old
+    Firecrawl markdown scrape (which stopped matching the redesigned page and
+    silently returned 0 events).
+    """
+    return await fetch_librarycalendar_events(
+        "Lincolnwood",
+        "https://www.lincolnwoodlibrary.org",
+        default_location="Lincolnwood Library",
+    )
 
 # UPDATED: Changed to use AsyncFirecrawl
 async def _fetch_mgpl_content(app: AsyncFirecrawl) -> str:
@@ -1391,6 +1284,95 @@ async def fetch_morton_grove_parks_events() -> List[Dict[str, Any]]:
                 "Program Type": "Not found",
                 "Description": "Not found",
                 "Link": link,
+            })
+        except Exception as e:
+            logger.debug(f"Error parsing {library_name} event: {e}")
+            continue
+
+    logger.info(f"Found {len(events)} events for {library_name}")
+    return events
+
+
+async def fetch_evanston_city_events() -> List[Dict[str, Any]]:
+    """Fetch City of Evanston community events from its Revize CMS calendar feed.
+
+    The calendar page (cityofevanston.org/calendar.php) is rendered client-side
+    by the revizeCalendar plugin, which loads all events as JSON from
+    `calendar_data_handler.php?webspace=evanstonil`. The feed mixes three
+    calendars; only `primary_calendar_name == "Events"` holds community events
+    (festivals, markets, concerts) — "Meetings" and "City Council" are skipped.
+    Start times of midnight or >= 11:50 PM are Revize all-day placeholders.
+    """
+    library_name = "Evanston City"
+    logger.info(f"Fetching {library_name} events...")
+    base_url = "https://www.cityofevanston.org"
+    feed_url = (
+        f"{base_url}/_assets_/plugins/revizeCalendar/calendar_data_handler.php"
+        "?webspace=evanstonil&relative_revize_url=//cms6.revize.com&protocol=https:"
+    )
+
+    start_str = START_DATE or compute_date_window()[0]
+    days = DAYS_TO_FETCH or DEFAULT_DAYS_TO_FETCH
+    try:
+        start_dt = datetime.strptime(start_str, "%Y-%m-%d")
+    except ValueError:
+        start_dt = datetime.now()
+    end_dt = start_dt + timedelta(days=max(days - 1, 0))
+
+    session = await get_http_session()
+    try:
+        async with REQUESTS_SEM:
+            async with session.get(feed_url, headers=WNPLD_HEADERS) as resp:
+                resp.raise_for_status()
+                data = await resp.json(content_type=None)
+    except Exception as e:
+        logger.error(f"Failed to fetch {library_name}: {e}")
+        return []
+    if not isinstance(data, list):
+        logger.error(f"Unexpected {library_name} feed payload: {type(data)}")
+        return []
+
+    events: List[Dict[str, Any]] = []
+    for item in data:
+        try:
+            if not isinstance(item, dict) or item.get("primary_calendar_name") != "Events":
+                continue
+            title = clean_text(unescape(item.get("title") or ""))
+            if not title:
+                continue
+
+            start_value = _parse_tribe_datetime(item.get("start"))
+            if not start_value:
+                continue
+            if not (start_dt.date() <= start_value.date() <= end_dt.date()):
+                continue
+            date_value = start_value.strftime("%Y-%m-%d")
+
+            # Midnight and ~11:55 PM starts are the feed's all-day placeholders.
+            if start_value.time() == datetime.min.time() or (
+                start_value.hour == 23 and start_value.minute >= 50
+            ):
+                time_value = "All Day"
+            else:
+                time_value = start_value.strftime("%I:%M %p").lstrip("0")
+
+            description = html_to_text(unquote(item.get("desc") or ""))
+            location = clean_text(item.get("location") or "")
+
+            link = (item.get("url") or "").strip()
+            if link and not re.match(r"^https?://", link):
+                link = f"https://{link}" if "." in link.split("/")[0] else urljoin(base_url, link)
+
+            events.append({
+                "Library": library_name,
+                "Title": title,
+                "Date": date_value,
+                "Time": time_value,
+                "Location": location or "Evanston, IL",
+                "Age Group": extract_age_group(f"{title} {description}"),
+                "Program Type": "City Event",
+                "Description": description or "Not found",
+                "Link": link or "N/A",
             })
         except Exception as e:
             logger.debug(f"Error parsing {library_name} event: {e}")
@@ -2625,6 +2607,7 @@ def _event_sources() -> List[Tuple[str, Any]]:
         ("Chicago Botanic Garden", lambda: fetch_cbg_events()),
         ("Glenview Park District", lambda: fetch_glenview_parks_events()),
         ("Morton Grove Park District", lambda: fetch_morton_grove_parks_events()),
+        ("Evanston City", lambda: fetch_evanston_city_events()),
     ]
 
 
