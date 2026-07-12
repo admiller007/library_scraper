@@ -27,7 +27,12 @@ import requests
 # Make `library_all_events` importable when invoked from repo root or scripts/.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from library_all_events import collect_all_events, parse_time_to_sortable  # noqa: E402
+from library_all_events import (  # noqa: E402
+    collect_all_events,
+    failed_sources,
+    parse_time_to_sortable,
+    zero_event_sources,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("scrape_to_supabase")
@@ -137,6 +142,21 @@ def _upsert_events(rows: List[Dict[str, Any]]) -> None:
         log.info("Upserted batch %d-%d", i, i + len(chunk))
 
 
+def _source_health_note() -> Optional[str]:
+    """Summarize broken-looking sources from the scraper's progress state.
+
+    A source that 'succeeds' with 0 events is the silent-breakage signature;
+    recorded on the scrape_runs row so it is visible without a schema change."""
+    parts = []
+    failed = failed_sources()
+    zero = zero_event_sources()
+    if failed:
+        parts.append(f"failed_sources: {', '.join(failed)}")
+    if zero:
+        parts.append(f"zero_event_sources: {', '.join(zero)}")
+    return "; ".join(parts) or None
+
+
 def _revalidate_vercel() -> None:
     url = os.environ.get("VERCEL_REVALIDATE_URL")
     secret = os.environ.get("REVALIDATE_SECRET")
@@ -165,7 +185,10 @@ def main() -> None:
         log.info("Prepared %d rows (raw events: %d)", len(rows), len(events))
         if rows:
             _upsert_events(rows)
-        _finish_scrape_run(run_id, "success", len(rows), None)
+        note = _source_health_note()
+        if note:
+            log.warning("Source health: %s", note)
+        _finish_scrape_run(run_id, "success", len(rows), note)
         _revalidate_vercel()
     except Exception as exc:
         log.exception("Scrape failed")

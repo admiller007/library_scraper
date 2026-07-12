@@ -61,7 +61,15 @@ LibraryScrapper/
 ### Scraper — `library_all_events.py`
 
 - All library fetchers return `List[Dict[str, Any]]` with the schema: `Library, Title, Date, Time, Location, Age Group, Program Type, Description, Link`.
+- **`_event_sources()`** is the single source registry (label → fetcher lambda). Labels must be unique: they are the dedup-key component, the frontend Libraries filter value, and the progress-tracking key. `source_labels()` derives the label list for progress init.
+- **Generic adapters** (pass a label + base URL):
+  - `fetch_bibliocommons_events(name, base_url, query_params)` — BiblioCommons (Firecrawl markdown parse)
+  - `fetch_libnet_events(name, domain)` — LibNet/Communico `eeventcaldata` JSON (also works for Communico on custom domains, e.g. `www.hplibrary.org`)
+  - `fetch_tribe_events(name, base_url)` — WordPress "The Events Calendar" REST (`/wp-json/tribe/events/v1/events`); used by Forest Preserves and the Wilmette/Northbrook park districts
+  - `fetch_librarycalendar_events(name, base_url)` — LibraryMarket LibraryCalendar Drupal sites (`/events/upcoming` + `lc-` classes); used by WNPLD, Prospect Heights, Vernon Area
+  - `fetch_civicplus_events(name, base_url, cids)` — CivicPlus/CivicEngage municipal calendars (`calendar.aspx?view=list&CID=&startDate=&enddate=`); used by Village of Skokie and Lincolnwood
 - **`_gather_and_filter_events(start_date_str, days)`** does the orchestration: runs all fetchers via `asyncio.gather`, deduplicates by `(Library, Title, Date, Time)`, parses dates, filters to the window, sorts.
+- **Zero-count detection:** a source that "succeeds" with 0 events logs a warning and is flagged in the progress state; `zero_event_sources()` / `failed_sources()` expose this after a run.
 - **`collect_all_events(start_date_str=None, days=None)`** is the public entry point used by the Supabase adapter. It initializes progress state and calls the gather helper.
 - **`main()`** is the CLI entry point — calls `collect_all_events()` then writes CSV/PDF/ICS files locally. Used for ad-hoc local runs, not in production.
 
@@ -72,7 +80,7 @@ The progress-state JSON (`scrape_progress.json`) is still written but no longer 
 - Creates a `scrape_runs` row with `status='running'`.
 - Calls `collect_all_events()` and maps the result to Supabase rows via `_to_row()`. Computes `start_at = event_date + event_time` in `America/Chicago`.
 - UPSERTs in batches of 200 against `on_conflict=library,title,event_date,event_time`.
-- On success: marks the run `success`, POSTs to `$VERCEL_REVALIDATE_URL` with the Bearer secret.
+- On success: marks the run `success`, POSTs to `$VERCEL_REVALIDATE_URL` with the Bearer secret. If any sources failed or returned 0 events, they are recorded in the run's `error_message` (e.g. `zero_event_sources: X, Y`) while status stays `success` — check this to catch silently broken scrapers.
 - On failure: marks the run `failed` with the exception repr.
 
 Required env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `FIRECRAWL_API_KEY`. Optional: `VERCEL_REVALIDATE_URL`, `REVALIDATE_SECRET`, `TIMEZONE`.
@@ -112,11 +120,13 @@ Mapped to Supabase columns by `_to_row()` — note casing differences (`Library`
 
 ### Add a new library
 
-1. Identify the system (Bibliocommons / LibNet / custom Firecrawl).
-2. Add a fetcher in `library_all_events.py`.
-3. Append `("<Label>", lambda: fetch_<library>_events(...))` to the `sources` list in `_gather_and_filter_events()`.
+1. Identify the system (BiblioCommons / LibNet-Communico / Tribe / LibraryCalendar / CivicPlus / custom Firecrawl). Check the site's events page for `libnet.info`, `/wp-json/tribe/`, `lc-event` classes, or `calendar.aspx`.
+2. If a generic adapter matches, no new fetcher is needed; otherwise add one in `library_all_events.py`.
+3. Append `("<Label>", lambda: fetch_..._events(...))` to `_event_sources()`. The label must be unique.
 4. Test with `python library_all_events.py --days 1`.
 5. Run `python scripts/scrape_to_supabase.py --days 1` against a dev Supabase project to verify upserts and types.
+
+Gotchas seen in practice: some WAFs reject aiohttp but accept `requests` (use `_wnpld_request_async`) or require a browser User-Agent; Arlington Heights (`ahml.info`) renders events via AJAX and has no fetcher yet; Kohl Children's Museum and the Gichigamiin (ex-Mitchell) museum had no usable feeds as of 2026-07.
 
 ### Modify the frontend
 
