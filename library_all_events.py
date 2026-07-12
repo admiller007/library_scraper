@@ -1341,20 +1341,11 @@ async def fetch_evanston_city_events() -> List[Dict[str, Any]]:
             if not title:
                 continue
 
-            start_value = _parse_tribe_datetime(item.get("start"))
-            if not start_value:
+            # Recurring events carry an iCal rrule whose single `start` is often
+            # months before the window; expand it into per-occurrence dates.
+            occurrences = _evanston_occurrences(item, start_dt, end_dt)
+            if not occurrences:
                 continue
-            if not (start_dt.date() <= start_value.date() <= end_dt.date()):
-                continue
-            date_value = start_value.strftime("%Y-%m-%d")
-
-            # Midnight and ~11:55 PM starts are the feed's all-day placeholders.
-            if start_value.time() == datetime.min.time() or (
-                start_value.hour == 23 and start_value.minute >= 50
-            ):
-                time_value = "All Day"
-            else:
-                time_value = start_value.strftime("%I:%M %p").lstrip("0")
 
             description = html_to_text(unquote(item.get("desc") or ""))
             location = clean_text(item.get("location") or "")
@@ -1363,23 +1354,59 @@ async def fetch_evanston_city_events() -> List[Dict[str, Any]]:
             if link and not re.match(r"^https?://", link):
                 link = f"https://{link}" if "." in link.split("/")[0] else urljoin(base_url, link)
 
-            events.append({
-                "Library": library_name,
-                "Title": title,
-                "Date": date_value,
-                "Time": time_value,
-                "Location": location or "Evanston, IL",
-                "Age Group": extract_age_group(f"{title} {description}"),
-                "Program Type": "City Event",
-                "Description": description or "Not found",
-                "Link": link or "N/A",
-            })
+            for start_value in occurrences:
+                # Midnight and ~11:55 PM starts are the feed's all-day placeholders.
+                if start_value.time() == datetime.min.time() or (
+                    start_value.hour == 23 and start_value.minute >= 50
+                ):
+                    time_value = "All Day"
+                else:
+                    time_value = start_value.strftime("%I:%M %p").lstrip("0")
+
+                events.append({
+                    "Library": library_name,
+                    "Title": title,
+                    "Date": start_value.strftime("%Y-%m-%d"),
+                    "Time": time_value,
+                    "Location": location or "Evanston, IL",
+                    "Age Group": extract_age_group(f"{title} {description}"),
+                    "Program Type": "City Event",
+                    "Description": description or "Not found",
+                    "Link": link or "N/A",
+                })
         except Exception as e:
             logger.debug(f"Error parsing {library_name} event: {e}")
             continue
 
     logger.info(f"Found {len(events)} events for {library_name}")
     return events
+
+
+def _evanston_occurrences(item: Dict[str, Any], start_dt: datetime, end_dt: datetime) -> List[datetime]:
+    """Return the in-window start datetimes for an Evanston feed item.
+
+    Non-recurring items yield their single `start` if it falls in the window.
+    Recurring items (with an iCal `rrule`) are expanded to every occurrence
+    inside the window — otherwise weekly series whose base `start` predates the
+    window would be dropped entirely.
+    """
+    window_start = datetime.combine(start_dt.date(), datetime.min.time())
+    window_end = datetime.combine(end_dt.date(), datetime.max.time())
+
+    rrule_str = item.get("rrule")
+    if rrule_str:
+        try:
+            from dateutil.rrule import rrulestr
+            ruleset = rrulestr(rrule_str, forceset=True)
+            return [d for d in ruleset.between(window_start, window_end, inc=True)]
+        except Exception as e:
+            logger.debug(f"Failed to expand Evanston rrule '{str(rrule_str)[:40]}': {e}")
+            # Fall through to the single-start handling below.
+
+    start_value = _parse_tribe_datetime(item.get("start"))
+    if start_value and window_start.date() <= start_value.date() <= window_end.date():
+        return [start_value]
+    return []
 
 
 def _wnpld_clean_time(raw: str) -> str:
