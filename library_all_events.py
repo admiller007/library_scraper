@@ -5,6 +5,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 import re
+import time
 import argparse
 import aiohttp
 import requests
@@ -1415,10 +1416,37 @@ def _wnpld_clean_time(raw: str) -> str:
     normalized = raw.replace("\u2013", "-").replace("\u2014", "-")
     return clean_text(normalized)
 
-def _wnpld_request(url: str) -> str:
-    resp = requests.get(url, headers=WNPLD_HEADERS, timeout=20)
-    resp.raise_for_status()
-    return resp.text
+_WNPLD_TRANSIENT_STATUS = {429, 500, 502, 503, 504}
+
+def _wnpld_request(url: str, max_attempts: int = 3) -> str:
+    """Fetch a LibraryCalendar page with retry/backoff.
+
+    Runs in a worker thread (via _wnpld_request_async), so time.sleep is safe.
+    Retries transient network errors and transient HTTP statuses (429/5xx) —
+    a single blip previously zeroed a whole source since the listing loop
+    breaks on any error. 4xx like 404 are not retried.
+    """
+    for attempt in range(max_attempts):
+        try:
+            resp = requests.get(url, headers=WNPLD_HEADERS, timeout=25)
+            if resp.status_code in _WNPLD_TRANSIENT_STATUS:
+                raise requests.exceptions.HTTPError(
+                    f"{resp.status_code} transient", response=resp
+                )
+            resp.raise_for_status()
+            return resp.text
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout,
+                requests.exceptions.HTTPError) as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            # Non-transient HTTP errors (e.g. 404) should fail fast.
+            if isinstance(e, requests.exceptions.HTTPError) and status not in _WNPLD_TRANSIENT_STATUS:
+                raise
+            if attempt == max_attempts - 1:
+                raise
+            wait = 1.5 * (2 ** attempt)
+            logger.warning(f"LibraryCalendar fetch {url} attempt {attempt+1} failed ({e}); retrying in {wait}s")
+            time.sleep(wait)
 
 async def _wnpld_request_async(url: str) -> str:
     async with REQUESTS_SEM:
