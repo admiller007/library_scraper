@@ -1294,6 +1294,162 @@ async def fetch_morton_grove_parks_events() -> List[Dict[str, Any]]:
     return events
 
 
+async def fetch_rseventspro_events(library_name: str, base_url: str) -> List[Dict[str, Any]]:
+    """Fetch events from a Joomla RSEvents!Pro month calendar (e.g. Niles PD).
+
+    Each month grid at `{base_url}/calendar/MM/YYYY` embeds events as
+    `<a class="rse_event_link">` anchors carrying a `span.event-name` title and
+    a `data-bs-content` tooltip formatted "From <Month DD>, <time>". We walk
+    every month the scrape window touches. The site's WAF rejects aiohttp, so we
+    fetch via the requests-based `_wnpld_request_async` helper.
+    """
+    logger.info(f"Fetching {library_name} events...")
+    base_url = base_url.rstrip("/")
+    start_str = START_DATE or compute_date_window()[0]
+    days = DAYS_TO_FETCH or DEFAULT_DAYS_TO_FETCH
+    try:
+        start_dt = datetime.strptime(start_str, "%Y-%m-%d")
+    except ValueError:
+        start_dt = datetime.now()
+    end_dt = start_dt + timedelta(days=max(days - 1, 0))
+
+    months = []
+    cursor = datetime(start_dt.year, start_dt.month, 1)
+    while cursor <= end_dt:
+        months.append((cursor.month, cursor.year))
+        cursor = datetime(cursor.year + (cursor.month == 12), (cursor.month % 12) + 1, 1)
+
+    from_re = re.compile(
+        r"From\s*(?:</strong>)?\s*([A-Za-z]+)\s+(\d{1,2}),?\s*(\d{1,2}:\d{2}\s*[AP]M)?", re.I
+    )
+    events: List[Dict[str, Any]] = []
+    seen = set()
+    for month, year in months:
+        url = f"{base_url}/calendar/{month:02d}/{year}"
+        try:
+            html = await _wnpld_request_async(url)
+        except Exception as e:
+            logger.error(f"Failed to fetch {library_name} {month}/{year}: {e}")
+            continue
+        soup = _make_soup(html)
+        for a in soup.find_all("a"):
+            name_el = a.select_one("span.event-name")
+            if not name_el:
+                continue
+            title = clean_text(name_el.get_text(" ", strip=True))
+            m = from_re.search(unescape(a.get("data-bs-content") or ""))
+            if not title or not m:
+                continue
+            mon = _MONTH_NAMES.get(m.group(1).capitalize())
+            if not mon:
+                continue
+            date_value = f"{year:04d}-{mon:02d}-{int(m.group(2)):02d}"
+            try:
+                d = datetime.strptime(date_value, "%Y-%m-%d")
+            except ValueError:
+                continue
+            if not (start_dt.date() <= d.date() <= end_dt.date()):
+                continue
+            t = parse_time_to_sortable((m.group(3) or "").upper())
+            time_value = t.strftime("%I:%M %p").lstrip("0") if t != datetime.min.time() else "All Day"
+            key = (title, date_value, time_value)
+            if key in seen:
+                continue
+            seen.add(key)
+            events.append({
+                "Library": library_name,
+                "Title": title,
+                "Date": date_value,
+                "Time": time_value,
+                "Location": library_name,
+                "Age Group": extract_age_group(title),
+                "Program Type": "Not found",
+                "Description": "Not found",
+                "Link": urljoin(base_url + "/", a.get("href") or ""),
+            })
+
+    logger.info(f"Found {len(events)} events for {library_name}")
+    return events
+
+
+async def fetch_dnn_events(library_name: str, base_url: str, list_path: str = "/Activities/Events") -> List[Dict[str, Any]]:
+    """Fetch events from a DotNetNuke events module (e.g. Park Ridge PD).
+
+    The list page renders `div.card` blocks; each has an
+    `a[href*='/Events/details/']` whose `title` attr is the event name, a
+    `.text-success` line formatted "July 17 | 8:00 PM - 9:30 PM", and a
+    `.event-summary` blurb. The year is absent from the label, so it is inferred
+    from the scrape window.
+    """
+    logger.info(f"Fetching {library_name} events...")
+    base_url = base_url.rstrip("/")
+    start_str = START_DATE or compute_date_window()[0]
+    days = DAYS_TO_FETCH or DEFAULT_DAYS_TO_FETCH
+    try:
+        start_dt = datetime.strptime(start_str, "%Y-%m-%d")
+    except ValueError:
+        start_dt = datetime.now()
+    end_dt = start_dt + timedelta(days=max(days - 1, 0))
+
+    try:
+        html = await _wnpld_request_async(base_url + list_path)
+    except Exception as e:
+        logger.error(f"Failed to fetch {library_name}: {e}")
+        return []
+
+    dt_re = re.compile(r"([A-Za-z]+)\s+(\d{1,2})\s*\|\s*(\d{1,2}:\d{2}\s*[AP]M)?", re.I)
+    events: List[Dict[str, Any]] = []
+    seen = set()
+    soup = _make_soup(html)
+    for card in soup.select("div.card"):
+        try:
+            a = card.select_one("a[href*='/Events/details/']")
+            if not a:
+                continue
+            title = clean_text(a.get("title") or a.get_text(" ", strip=True))
+            dt_el = card.select_one(".text-success")
+            m = dt_re.search(dt_el.get_text(" ", strip=True)) if dt_el else None
+            if not title or not m:
+                continue
+            mon = _MONTH_NAMES.get(m.group(1).capitalize())
+            if not mon:
+                continue
+            day = int(m.group(2))
+            year = _infer_event_year(mon, day, start_dt)
+            date_value = f"{year:04d}-{mon:02d}-{day:02d}"
+            try:
+                d = datetime.strptime(date_value, "%Y-%m-%d")
+            except ValueError:
+                continue
+            if not (start_dt.date() <= d.date() <= end_dt.date()):
+                continue
+            t = parse_time_to_sortable((m.group(3) or "").upper())
+            time_value = t.strftime("%I:%M %p").lstrip("0") if t != datetime.min.time() else "All Day"
+            summary_el = card.select_one(".event-summary") or card.select_one("p")
+            description = html_to_text(summary_el.get_text(" ", strip=True)) if summary_el else ""
+            key = (title, date_value, time_value)
+            if key in seen:
+                continue
+            seen.add(key)
+            events.append({
+                "Library": library_name,
+                "Title": title,
+                "Date": date_value,
+                "Time": time_value,
+                "Location": library_name,
+                "Age Group": extract_age_group(f"{title} {description}"),
+                "Program Type": "Not found",
+                "Description": description or "Not found",
+                "Link": urljoin(base_url, a.get("href") or ""),
+            })
+        except Exception as e:
+            logger.debug(f"Error parsing {library_name} event: {e}")
+            continue
+
+    logger.info(f"Found {len(events)} events for {library_name}")
+    return events
+
+
 async def fetch_evanston_city_events() -> List[Dict[str, Any]]:
     """Fetch City of Evanston community events from its Revize CMS calendar feed.
 
@@ -2275,6 +2431,21 @@ async def _fetch_tribe_page(session, api_url: str, page: int, start_date: str, e
             resp.raise_for_status()
             return await resp.json()
 
+async def _fetch_tribe_page_requests(api_url: str, page: int, start_date: str, end_date: str) -> Dict[str, Any]:
+    """Same as _fetch_tribe_page but via `requests` off-thread.
+
+    Some tribe sites (e.g. pdhp.org) sit behind Cloudflare, which 403s aiohttp's
+    TLS fingerprint but lets urllib3/requests through. The JSON API itself needs
+    no cookie priming — a plain GET with a browser UA suffices.
+    """
+    params = {"page": page, "per_page": 50, "start_date": start_date, "end_date": end_date}
+    def _blocking():
+        resp = requests.get(api_url, params=params, headers=WNPLD_HEADERS, timeout=25)
+        resp.raise_for_status()
+        return resp.json()
+    async with REQUESTS_SEM:
+        return await asyncio.to_thread(_blocking)
+
 def _build_tribe_location(item: Dict[str, Any], default_location: str) -> str:
     """Create a readable location string from a tribe event payload."""
     parts: List[str] = []
@@ -2313,11 +2484,13 @@ def _parse_tribe_datetime(raw_value: Any) -> datetime | None:
     except Exception:
         return None
 
-async def fetch_tribe_events(library_name: str, base_url: str, default_location: Optional[str] = None) -> List[Dict[str, Any]]:
+async def fetch_tribe_events(library_name: str, base_url: str, default_location: Optional[str] = None,
+                             use_requests: bool = False) -> List[Dict[str, Any]]:
     """Generic fetcher for WordPress sites running The Events Calendar (tribe).
 
     Works against `{base_url}/wp-json/tribe/events/v1/events`. Used by the
-    Forest Preserves and park-district sources.
+    Forest Preserves and park-district sources. Pass `use_requests=True` for
+    Cloudflare-fronted sites that 403 aiohttp (e.g. pdhp.org).
     """
     logger.info(f"Fetching {library_name} events...")
     api_url = f"{base_url.rstrip('/')}/wp-json/tribe/events/v1/events"
@@ -2343,7 +2516,10 @@ async def fetch_tribe_events(library_name: str, base_url: str, default_location:
 
         while page <= total_pages:
             try:
-                data = await retry_with_backoff(_fetch_tribe_page, session, api_url, page, start_str, end_str)
+                if use_requests:
+                    data = await retry_with_backoff(_fetch_tribe_page_requests, api_url, page, start_str, end_str)
+                else:
+                    data = await retry_with_backoff(_fetch_tribe_page, session, api_url, page, start_str, end_str)
             except Exception as e:
                 logger.error(f"Failed to fetch {library_name} page {page}: {e}")
                 break
@@ -2681,6 +2857,10 @@ def _event_sources() -> List[Tuple[str, Any]]:
         ("Chicago Botanic Garden", lambda: fetch_cbg_events()),
         ("Glenview Park District", lambda: fetch_glenview_parks_events()),
         ("Morton Grove Park District", lambda: fetch_morton_grove_parks_events()),
+        ("Niles Park District", lambda: fetch_rseventspro_events("Niles Park District", "https://niles-parks.org")),
+        ("Park Ridge Park District", lambda: fetch_dnn_events("Park Ridge Park District", "https://www.prparks.org")),
+        ("Park District of Highland Park", lambda: fetch_tribe_events("Park District of Highland Park", "https://www.pdhp.org", use_requests=True)),
+        ("Deerfield Park District", lambda: fetch_civicplus_events("Deerfield Park District", "https://www.deerfieldparks.org", cids=[14, 28])),
         ("Evanston City", lambda: fetch_evanston_city_events()),
     ]
 
