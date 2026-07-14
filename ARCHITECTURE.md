@@ -1,278 +1,192 @@
 # Library Event Scraper Architecture
 
+> Rewritten 2026-07-13 to match `main`. The previous version of this document described the
+> Flask/Render.com/Firecrawl-only architecture, which was replaced by the Supabase + Vercel
+> migration (see `docs/plans/2026-05-25-vercel-supabase-migration-design.md`). There is no
+> Flask server, no Render/Heroku deployment, and no local CSV/PDF/ICS generation in production.
+
+## Visual diagram (Excalidraw)
+
+An editable, hand-drawn diagram of the current pipeline is here:
+https://excalidraw.com/#json=JJe-MX2U5tS2gpXyCtm8F,0vrh_s_-i5bccS7kHSUfaA
+
 ## Data Flow Diagram
 
 ```mermaid
 flowchart TD
-    Start[User Initiates Scrape] --> Main[library_all_events.py main]
+    Cron["GitHub Actions cron\n0 12 * * * UTC + manual dispatch"] --> Adapter["scripts/scrape_to_supabase.py"]
 
-    Main --> Config[Parse CLI Args & Load Env Vars<br/>Set date range, age filters]
+    Adapter --> Collect["library_all_events.py\ncollect_all_events()"]
 
-    Config --> Async[Launch Async Fetchers Concurrently]
+    subgraph Fetchers["61 sources across 6 adapter families"]
+        BC["BiblioCommons (15)\nFirecrawl markdown parse"]
+        LN["LibNet / Communico (16)\nJSON API"]
+        TR["Tribe / WP Events Calendar (8)\nREST API"]
+        LC["LibraryCalendar / Drupal (6)\nHTML scrape"]
+        CP["CivicPlus (4)\ncalendar.aspx list view"]
+        CU["Custom fetchers (12)\nbespoke per-site parsing"]
+    end
 
-    Async --> LW[Lincolnwood Fetcher<br/>Firecrawl API]
-    Async --> MG[Morton Grove Fetcher<br/>Firecrawl API]
-    Async --> SK[Skokie Fetcher<br/>Firecrawl API]
-    Async --> BC[Bibliocommons Fetchers<br/>Evanston, CPL branches]
-    Async --> LN[LibNet Fetchers<br/>Wilmette, Niles]
-    Async --> PD[Park District Fetcher<br/>BeautifulSoup]
+    Collect --> Fetchers
+    BC --> Gather["asyncio.gather all fetchers"]
+    LN --> Gather
+    TR --> Gather
+    LC --> Gather
+    CP --> Gather
+    CU --> Gather
 
-    LW --> Parse[Parse Markdown/HTML<br/>Extract event data]
-    MG --> Parse
-    SK --> Parse
-    BC --> Parse
-    LN --> Parse
-    PD --> Parse
+    Gather --> Dedupe["Dedupe by (Library, Title, Date, Time)\nParse dates, filter to window, sort"]
 
-    Parse --> Aggregate[Aggregate All Events<br/>Combine from all sources]
+    Dedupe --> Adapter2["scrape_to_supabase.py\nmap rows via _to_row(), UPSERT batch=200"]
 
-    Aggregate --> Dedupe[Deduplicate Events<br/>By Library+Title+Date+Time]
+    Adapter2 --> DB[("Supabase Postgres\nevents, scrape_runs\nRLS: anon read-only")]
 
-    Dedupe --> Sort[Parse & Sort Events<br/>By date, then time]
+    Adapter2 -.->|on success| Revalidate["POST $VERCEL_REVALIDATE_URL\nBearer $REVALIDATE_SECRET"]
 
-    Sort --> CSV[Generate CSV Output<br/>all_library_events_YYYYMMDD.csv]
-    Sort --> PDF[Generate PDF Report<br/>all_library_events_YYYYMMDD.pdf]
-    Sort --> ICS[Generate ICS Calendar<br/>all_library_events_YYYYMMDD.ics]
+    DB --> Cache["web/lib/events.ts\ncached fetchers, cacheTag('events')"]
 
-    CSV --> Storage[Save to DATA_DIR]
-    PDF --> Storage
-    ICS --> Storage
+    Cache --> Page["app/page.tsx\nserver component"]
+    Page --> EventList["app/components/EventList.tsx\nclient-side filtering"]
 
-    Storage --> WebGUI[Web GUI Access<br/>library_web_gui.py]
+    Cache --> ApiRevalidate["app/api/revalidate\nrevalidateTag('events', 'max')"]
+    Cache --> ApiExport["app/api/export/{ics,pdf}\non-demand format exports"]
 
-    WebGUI --> Filter[Filter Events<br/>By library, date, search terms]
-    WebGUI --> Export[Export ICS/PDF<br/>Via API endpoints]
-    WebGUI --> Trigger[Trigger New Scrape<br/>Manual refresh]
+    GUI["library_gui.py (Tkinter)\nreads local CSV exports only"]
 
-    Trigger -.->|Restart Process| Main
-
-    style Main fill:#2d3748,stroke:#4a5568,color:#fff
-    style Async fill:#2d3748,stroke:#4a5568,color:#fff
-    style Aggregate fill:#2d3748,stroke:#4a5568,color:#fff
-    style WebGUI fill:#2d3748,stroke:#4a5568,color:#fff
-    style Storage fill:#2d3748,stroke:#4a5568,color:#fff
+    style DB fill:#2d3748,stroke:#4a5568,color:#fff
+    style Gather fill:#2d3748,stroke:#4a5568,color:#fff
+    style Cache fill:#2d3748,stroke:#4a5568,color:#fff
 ```
 
 ## Component Details
 
 ### Scraper Core (`library_all_events.py`)
 
-**Input:**
-- CLI arguments: `--start-date`, `--days`, `--start-offset-days`
-- Environment: `FIRECRAWL_API_KEY`, `TIMEZONE`, `DATA_DIR`
+**Entry point:** `collect_all_events(start_date_str=None, days=None)` — used by the Supabase
+adapter. The CLI `main()` still exists for ad-hoc local runs (writes CSV/PDF/ICS), but is not
+used in production.
 
 **Process:**
-1. **Concurrent Fetching** - Uses `asyncio.gather()` to run 8+ library fetchers in parallel
-2. **Error Handling** - Individual failures don't crash entire scrape
-3. **Retry Logic** - Exponential backoff for network/rate limit errors
-4. **Text Cleaning** - Removes markdown, normalizes whitespace
-5. **Age Filtering** - LibNet libraries filter for K-2, 3-5 grades
+1. **`_event_sources()`** — single registry of 61 `(label, fetcher lambda)` pairs across 6
+   adapter families. Labels are unique and double as the dedup-key component, the frontend
+   Libraries filter value, and the progress-tracking key.
+2. **Concurrent fetching** — `_gather_and_filter_events()` runs all fetchers via
+   `asyncio.gather()`.
+3. **Zero-count detection** — a source that "succeeds" with 0 events is flagged; surfaced via
+   `zero_event_sources()` / `failed_sources()`.
+4. **Dedup** — by `(Library, Title, Date, Time)`.
+5. **Filter + sort** — parses dates, filters to the requested window, sorts.
 
-**Output:**
-- CSV file (primary data format)
-- PDF report (formatted for printing)
-- ICS calendar (importable to Google Calendar, etc.)
+**Adapter families** (generic, parameterized per site — see `CLAUDE.md` for full signatures):
 
-### Web Interface (`library_web_gui.py`)
+| Family | Sources | Method |
+|--------|---------|--------|
+| BiblioCommons | 15 | Firecrawl markdown parse |
+| LibNet / Communico | 16 | `eeventcaldata` JSON endpoint |
+| Tribe (WordPress Events Calendar) | 8 | `/wp-json/tribe/events/v1/events` REST |
+| LibraryCalendar (LibraryMarket/Drupal) | 6 | `/events/upcoming` HTML scrape |
+| CivicPlus / CivicEngage | 4 | `calendar.aspx?view=list` |
+| Custom / bespoke | 12 | Per-site parsing (Firecrawl or requests/BeautifulSoup) |
 
-**Routes:**
-- `GET /` - Main HTML interface
-- `GET /api/events` - Filtered events JSON
-- `POST /api/scrape` - Trigger new scrape
-- `GET /api/scrape/status` - Check scrape progress
-- `GET /api/export/ics` - Download ICS file
-- `GET /api/export/pdf` - Download PDF file
+### Supabase adapter (`scripts/scrape_to_supabase.py`)
 
-**Features:**
-- Real-time filtering without page reload
-- Advanced search (any/all/exact/fuzzy matching)
-- Multi-field search (title, description, location, age)
-- Progress tracking for long-running scrapes
+- Creates a `scrape_runs` row with `status='running'`.
+- Calls `collect_all_events()`, maps results to Supabase rows via `_to_row()` (computes
+  `start_at = event_date + event_time` in `America/Chicago`).
+- UPSERTs in batches of 200, `on_conflict=library,title,event_date,event_time`.
+- On success: marks the run `success`; if any sources failed or returned 0 events, records them
+  in `error_message` (e.g. `zero_event_sources: X, Y`) while status stays `success`; POSTs to
+  `$VERCEL_REVALIDATE_URL` with the Bearer secret.
+- On failure: marks the run `failed` with the exception repr.
 
-### Library Fetchers
+Required env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `FIRECRAWL_API_KEY`. Optional:
+`VERCEL_REVALIDATE_URL`, `REVALIDATE_SECRET`, `TIMEZONE`.
 
-| Library | System | Method | Key Features |
-|---------|--------|--------|--------------|
-| Lincolnwood | Custom | Firecrawl | Markdown parsing, date regex |
-| Morton Grove | Custom | Firecrawl | Markdown parsing, age extraction |
-| Skokie | Custom | Firecrawl | Markdown parsing, location cleanup |
-| Evanston | Bibliocommons | API | Pagination, structured data |
-| CPL Branches | Bibliocommons | API | Per-branch filtering |
-| Wilmette | LibNet | API | JSON endpoint, age filtering |
-| Niles | LibNet | API | JSON endpoint, age filtering |
-| Chicago Parks | Custom | BeautifulSoup | HTML parsing |
+### Frontend (`web/`, Next.js 16 on Vercel)
+
+- **Cache Components enabled** (`cacheComponents: true`). Event reads use `'use cache'` +
+  `cacheLife` + `cacheTag('events')`.
+- `getSupabase()` returns `null` if env vars are missing — degraded mode (empty list,
+  "Refresh pending") so builds without Supabase configured still succeed.
+- Filtering is **client-side**: `getUpcomingEvents()` returns the full upcoming window once;
+  `<EventList>` filters in memory.
+- `/api/revalidate` calls `revalidateTag('events', 'max')` — the second argument is required
+  in Next.js 16.
+- `/api/export/{ics,pdf}` render exports on demand from Supabase; no files are generated by
+  the scraper.
+
+### Desktop GUI (`library_gui.py`)
+
+Unchanged legacy tool — reads local CSV files from a manual `python library_all_events.py`
+run. **Does not read from Supabase.**
 
 ## Event Schema
 
-All fetchers return events in this standardized format:
-
 ```python
 {
-    "Library": str,          # "Lincolnwood Library"
-    "Title": str,            # "Storytime for Kids"
-    "Date": str,             # "2025-12-20"
-    "Time": str,             # "2:30 PM" or "All Day"
-    "Location": str,         # "Main Room" or "N/A"
-    "Age Group": str,        # "Grades K-2" or "All Ages"
-    "Program Type": str,     # "Story Time" or "Not found"
-    "Description": str,      # Event details
-    "Link": str              # Full URL or "N/A"
+    "Library": str,
+    "Title": str,
+    "Date": str,             # Parseable date string
+    "Time": str,              # "HH:MM AM/PM" or "All Day"
+    "Location": str,
+    "Age Group": str,
+    "Program Type": str,
+    "Description": str,
+    "Link": str,              # URL or "N/A"
 }
 ```
 
+Mapped to Supabase columns by `_to_row()` (e.g. `Library` -> `library`). Dedup key:
+`(library, title, event_date, event_time)`, enforced by a Postgres unique constraint and
+matched in the Python dedup pass.
+
 ## Deployment Architecture
 
-### Render.com Production
-
 ```
-┌─────────────────────────────────────┐
-│  Render Cron Job (Daily 6 AM)      │
-│  python library_all_events.py       │
-└──────────┬──────────────────────────┘
-           │
-           v
-┌─────────────────────────────────────┐
-│  Persistent Disk: /opt/render/...   │
-│  - all_library_events_*.csv         │
-│  - all_library_events_*.pdf         │
-│  - all_library_events_*.ics         │
-└──────────┬──────────────────────────┘
-           │
-           v
-┌─────────────────────────────────────┐
-│  Gunicorn Web Server (2 workers)    │
-│  library_web_gui.py                 │
-│  Port: $PORT (from Render)          │
-└─────────────────────────────────────┘
+GitHub Actions (.github/workflows/scrape.yml)
+  cron: 0 12 * * * UTC (06:00 CST / 07:00 CDT) + workflow_dispatch
+  └─ python scripts/scrape_to_supabase.py
+        ├─ collect_all_events() -> 61 fetchers via asyncio.gather
+        └─ UPSERT batches of 200 -> Supabase (events, scrape_runs)
+                                │
+                                ▼
+                       Supabase Postgres (RLS: anon read-only)
+                                │
+                                ▼
+                       Next.js 16 on Vercel (web/)
+                       - server-rendered page + client-side filtering
+                       - /api/revalidate, /api/export/{ics,pdf}
 ```
 
-### Local Development
-
-```
-┌─────────────────────────────────────┐
-│  Terminal 1: Run Scraper            │
-│  python library_all_events.py       │
-└──────────┬──────────────────────────┘
-           │
-           v
-┌─────────────────────────────────────┐
-│  Local File System: ./data/         │
-│  - all_library_events_*.csv         │
-│  - all_library_events_*.pdf         │
-│  - all_library_events_*.ics         │
-└──────────┬──────────────────────────┘
-           │
-           v
-┌─────────────────────────────────────┐
-│  Terminal 2: Run Web Server         │
-│  python library_web_gui.py          │
-│  http://localhost:5000              │
-└─────────────────────────────────────┘
-```
+There is no persistent disk, no Gunicorn process, and no `$PORT` binding — Vercel serves the
+frontend and Supabase is the only stateful store. The GitHub Actions job is the only thing
+that writes to Supabase.
 
 ## Error Handling & Resilience
 
-### Retry Strategy
+- **Failure isolation** — each fetcher runs independently via `asyncio.gather`; one failing
+  source doesn't stop the rest.
+- **Zero-count / failed-source detection** — surfaced in the `scrape_runs.error_message` field
+  rather than a log file, so it's queryable from Supabase after the fact.
+- **Retry/backoff** — see `retry_with_backoff()` usage in the fetchers that need it (added for
+  LibraryCalendar sources — see commit "Add retry/backoff to LibraryCalendar fetches").
+- **WAF workarounds** — some sites reject `aiohttp` but accept `requests` (`_wnpld_request_async`)
+  or require a browser User-Agent.
 
-```python
-# retry_with_backoff() function
-Attempt 1 -> Fail -> Wait 1s
-Attempt 2 -> Fail -> Wait 2s
-Attempt 3 -> Fail -> Wait 4s
-Attempt 4 -> Success ✓
+## Known gaps (as of 2026-07)
 
-Handles:
-- ConnectionError
-- Timeout
-- HTTPError (429 rate limit)
-```
-
-### Failure Isolation
-
-- Each library fetcher runs independently
-- One library failure doesn't stop others
-- Failed fetchers return empty list `[]`
-- All errors logged to `library_events.log`
-
-### Data Validation
-
-- Events with missing required fields are logged but not included
-- Dates must be parseable (multiple formats supported)
-- Text cleaned to ASCII (removes problematic characters)
-- Deduplication prevents double-counting
-
-## Performance Characteristics
-
-### Scraping Speed
-
-- **Sequential**: ~5-8 minutes for all libraries
-- **Parallel (current)**: ~2-3 minutes for all libraries
-- **Bottleneck**: Firecrawl API rate limiting (1 concurrent request)
-
-### Resource Usage
-
-- **Memory**: ~100-200 MB during scraping
-- **Disk**: ~1-5 MB per output file set
-- **Network**: ~50-100 API calls per full scrape
-
-### Optimization Opportunities
-
-1. Increase `FIRECRAWL_CONCURRENCY` if API allows
-2. Cache Firecrawl responses for development
-3. Implement incremental updates (only fetch new events)
-4. Use connection pooling for HTTP requests
-
-## Security Considerations
-
-### API Key Management
-
-- ✅ Firecrawl API key in environment variable
-- ✅ `.env` file in `.gitignore`
-- ⚠️ Default key in code should be removed for production
-
-### Input Validation
-
-- Web GUI search terms not sanitized for XSS
-- File paths constructed from `DATA_DIR` (validate!)
-- No authentication on web GUI (anyone can trigger scrapes)
-
-### Recommendations
-
-1. Add rate limiting to web scrape endpoint
-2. Implement API authentication
-3. Sanitize all user input before HTML display
-4. Use absolute paths, validate `DATA_DIR`
-5. Add CSRF protection for state-changing operations
+- Arlington Heights (`ahml.info`) renders events via AJAX — no fetcher yet.
+- Kohl Children's Museum and the Gichigamiin (ex-Mitchell) museum had no usable feeds.
+- Evanston Parks & Rec (Amilia) was investigated and intentionally not wired up — registration
+  programs plus a CSRF lock made it impractical.
 
 ## Monitoring & Observability
 
-### Logs
-
-```
-library_events.log (rotating, 2 MB max, 3 backups)
-
-Key log lines:
-- "Fetching [Library] events..." (start)
-- "Found X events for [Library]" (success)
-- "Total events after de-duplication: X" (final count)
-- ERROR messages with stack traces (failures)
-```
-
-### Metrics to Track
-
-- Events per library per scrape
-- Scrape duration (total and per library)
-- API failure rate
-- Duplicate event rate
-- User interactions (web GUI)
-
-### Alerting Triggers
-
-- Zero events returned for all libraries
-- Scrape fails for >2 consecutive runs
-- API key expiration/invalidity
-- Disk space <100 MB remaining
+Progress state (`scrape_progress.json`) is still written during a scraper run but is no longer
+consumed by anything downstream. The source of truth for run health is the `scrape_runs` table
+in Supabase: `status` (`running`/`success`/`failed`) and `error_message` (zero-event/failed
+source names on an otherwise-successful run).
 
 ---
 
-*For detailed function references, see [CLAUDE.md](CLAUDE.md)*
+*For detailed function references and common tasks, see [CLAUDE.md](CLAUDE.md).*
